@@ -52,9 +52,19 @@ else
   build=(cargo zigbuild)
 fi
 
+# Build-machine paths (the cargo home, this checkout, the target dir) are rewritten in the panic
+# locations the binary carries, so it names no maintainer's home and two checkouts build the same
+# bytes. The target dir is inside the checkout, so its mapping comes last and wins.
+target_dir="${CARGO_TARGET_DIR:-target}"
+mkdir -p "${target_dir}"
+target_dir="$(cd "${target_dir}" && pwd)"
+remap="--remap-path-prefix=${CARGO_HOME:-${HOME}/.cargo}=/cargo"
+remap+=" --remap-path-prefix=$(pwd)=/zone-client --remap-path-prefix=${target_dir}=/target"
+export RUSTFLAGS="${RUSTFLAGS:+${RUSTFLAGS} }${remap}"
+
 "${build[@]}" --release --locked --target "${target}" --bin zone
 
-bin="target/${target}/release/zone"
+bin="${target_dir}/${target}/release/zone"
 kind="$(file -b "${bin}")"
 if ! grep -Eq 'static(-pie|ally) linked' <<<"${kind}"; then
   echo "build: ${bin} is not statically linked: ${kind}" >&2
