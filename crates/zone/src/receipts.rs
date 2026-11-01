@@ -55,13 +55,16 @@ impl std::fmt::Display for Failure {
     }
 }
 
+/// A receipt that verified on its own: its place in the input, the receipt, what it says.
+type Held<'a> = (usize, &'a String, Receipt);
+
 /// Every chain that verifies, and every receipt that does not. A chain stops at its first
 /// failure: the receipts after it have no verified place.
 pub fn verify(input: &Input) -> (Vec<Chain>, Vec<Failure>) {
     let ws = input.workspace_id.as_str();
     let mut failures = Vec::new();
     // Per actor, in order of first appearance: the receipts that verified on their own.
-    let mut by_actor: Vec<(String, Vec<(usize, &String, Receipt)>)> = Vec::new();
+    let mut by_actor: Vec<(String, Vec<Held>)> = Vec::new();
     let mut broken: Vec<String> = Vec::new();
     for (index, r) in input.receipts.iter().enumerate() {
         let Some((actor, seq)) = claimed(r) else {
