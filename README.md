@@ -5,6 +5,21 @@ The `zone` command-line client for Black Path Zones, written in Rust on top of t
 
 This repository is private until release.
 
+## Install
+
+On Linux (x86_64 or arm64):
+
+```sh
+curl -fsSL https://github.com/Black-Path-Labs/zone-client/releases/latest/download/install.sh | sh
+zone join <invite>
+```
+
+`install.sh` downloads the binary for this machine and `SHA256SUMS`, checks the sum (and the
+minisign signature when `minisign` is installed, otherwise it prints the command to check it) and
+installs to `~/.local/bin/zone`. It never uses sudo. `ZONE_VERSION=v0.1.0` pins a release and
+`ZONE_INSTALL_DIR` replaces `~/.local/bin`. While the repository is private, `ZONE_GH=1`
+downloads with `gh release download` and gh's login.
+
 ## Verify a download
 
 Each release carries `SHA256SUMS` over every binary and `SHA256SUMS.minisig`, a
