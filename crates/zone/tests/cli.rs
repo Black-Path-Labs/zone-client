@@ -1,5 +1,6 @@
-//! The CLI surface: help, version, and the not-implemented exit code of every subcommand that
-//! has not landed yet. `zone join` has its own tests (join.rs).
+//! The CLI surface: help, version, the not-implemented exit code of every subcommand that has
+//! not landed yet, and `status` and `run` before any join. `zone join` has its own tests
+//! (join.rs); status and run against a joined zone run in `scripts/smoke.sh`.
 
 use std::process::{Command, Output};
 
@@ -37,10 +38,51 @@ fn version_names_the_sdk_revision_from_the_lock() {
 
 #[test]
 fn unimplemented_subcommands_exit_2() {
-    for args in [&["status"][..], &["run"], &["receipts", "verify"]] {
+    for args in [&["receipts", "verify"][..]] {
         let out = zone(args);
         assert_eq!(out.status.code(), Some(2), "zone {args:?}");
         let err = String::from_utf8(out.stderr).unwrap();
         assert!(err.contains("not implemented"), "zone {args:?}: {err}");
     }
+}
+
+fn zone_in(state: &std::path::Path, args: &[&str]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_zone"))
+        .arg("--state")
+        .arg(state)
+        .args(args)
+        .output()
+        .expect("run zone")
+}
+
+#[test]
+fn status_before_any_join_is_not_joined_json_and_makes_no_state() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = tmp.path().join("zone");
+    let out = zone_in(&state, &["status"]);
+    assert!(out.status.success(), "{out:?}");
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(
+        v,
+        serde_json::json!({
+            "zoneId": null,
+            "pseudonym": null,
+            "state": "not-joined",
+            "members": 0,
+            "lastSyncMs": null,
+            "nextSyncMs": null,
+            "lastFailure": null,
+        })
+    );
+    assert!(!state.exists());
+}
+
+#[test]
+fn run_before_any_join_fails_and_makes_no_state() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = tmp.path().join("zone");
+    let out = zone_in(&state, &["run", "--rounds", "1"]);
+    assert_eq!(out.status.code(), Some(1), "{out:?}");
+    assert!(String::from_utf8_lossy(&out.stderr).contains("run `zone join` first"));
+    assert!(!state.exists());
 }
