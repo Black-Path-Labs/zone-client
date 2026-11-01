@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Cuts a draft GitHub release of `zone` on a maintainer's machine; this repo has no CI. From a
 # clean, pushed checkout it runs scripts/check.sh, builds every Linux target, writes SHA256SUMS
-# (signed when ZONE_SIGN_KEY is set, see scripts/sign.sh) and uploads them to a draft release.
+# (signed when ZONE_SIGN_KEY is set, see scripts/sign.sh) and uploads them with install.sh to a
+# draft release.
 # A draft is not public and creates no tag; publishing it is a separate, approved step.
 #
 #   scripts/release.sh vX.Y.Z[-pre]
@@ -72,6 +73,7 @@ fi
 scripts/check.sh
 rm -rf dist
 scripts/build.sh all-linux
+cp install.sh dist/
 if [ -n "${ZONE_BUILD_LOCK:-}" ]; then
   flock -u 9
 fi
