@@ -56,7 +56,7 @@ fi
 
 bin="target/${target}/release/zone"
 kind="$(file -b "${bin}")"
-if ! grep -Eq 'static(-pie)? linked' <<<"${kind}"; then
+if ! grep -Eq 'static(-pie|ally) linked' <<<"${kind}"; then
   echo "build: ${bin} is not statically linked: ${kind}" >&2
   exit 1
 fi
