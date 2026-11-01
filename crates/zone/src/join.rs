@@ -8,6 +8,7 @@
 //! a failed send (no grant in force yet: 404) the waiting backoff decides when.
 //!
 //! Every step is an SDK call. Running `zone join` again with the same code resumes the wait.
+//! Each sync is noted for `zone status` (record.rs).
 
 use std::path::Path;
 use std::sync::Arc;
@@ -20,6 +21,7 @@ use rand_core::{OsRng, RngCore};
 
 use crate::backoff::{self, Backoff};
 use crate::device;
+use crate::record::SyncRecord;
 use crate::secret::KitKey;
 use crate::transport::Http;
 
@@ -121,6 +123,7 @@ pub fn run(state: &Path, opts: Options<'_>) -> Result<Outcome, String> {
     let mut backoff = Backoff::default();
     let mut request_backoff = Backoff::default();
     let mut request_due = opts.kit.is_some().then_some(Instant::now());
+    let mut record = SyncRecord::load(state);
     loop {
         if let (Some(kit), Some(due)) = (opts.kit, request_due) {
             if Instant::now() >= due {
@@ -149,7 +152,10 @@ pub fn run(state: &Path, opts: Options<'_>) -> Result<Outcome, String> {
             return Ok(Outcome::Done);
         }
 
-        let wait = match device.sync(0) {
+        let synced = device.sync(0);
+        record.synced(synced.as_ref().map(|_| ()));
+        record.save(state)?;
+        let wait = match synced {
             Ok(_) if device.status().admitted => return admitted(&device, &zone_id),
             // Synced but not on the roster yet: waiting, like Core's not-admitted.
             Ok(_) => backoff.failed("not-admitted", OsRng.next_u64()),
@@ -164,12 +170,17 @@ pub fn run(state: &Path, opts: Options<'_>) -> Result<Outcome, String> {
         if let Some(limit) = opts.timeout {
             if until >= started + limit {
                 std::thread::sleep((started + limit).saturating_duration_since(Instant::now()));
-                return match device.sync(0) {
+                let synced = device.sync(0);
+                record.synced(synced.as_ref().map(|_| ()));
+                record.save(state)?;
+                return match synced {
                     Ok(_) if device.status().admitted => admitted(&device, &zone_id),
                     _ => Ok(Outcome::TimedOut),
                 };
             }
         }
+        record.next_in(until.saturating_duration_since(Instant::now()));
+        record.save(state)?;
         std::thread::sleep(until.saturating_duration_since(Instant::now()));
     }
 }

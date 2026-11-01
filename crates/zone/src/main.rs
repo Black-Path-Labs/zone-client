@@ -10,6 +10,8 @@ use clap::{Parser, Subcommand};
 mod backoff;
 mod device;
 mod join;
+mod record;
+mod run;
 mod secret;
 mod state;
 mod transport;
@@ -58,10 +60,15 @@ enum Command {
         #[arg(long, value_name = "SECS")]
         timeout: Option<u64>,
     },
-    /// Show this device's zones and their state.
+    /// Print this device's zone state as JSON: zone, pseudonym, admitted or pending, members,
+    /// last and next sync, last failure kind. Reads local state only.
     Status,
-    /// Run the client: stay connected to joined zones.
-    Run,
+    /// Keep the joined zone synced until SIGINT or SIGTERM.
+    Run {
+        /// Stop after N syncs.
+        #[arg(long, value_name = "N")]
+        rounds: Option<u32>,
+    },
     /// Work with zone receipts.
     Receipts {
         #[command(subcommand)]
@@ -82,7 +89,7 @@ impl Command {
         match self {
             Command::Join { .. } => "join",
             Command::Status => "status",
-            Command::Run => "run",
+            Command::Run { .. } => "run",
             Command::Receipts {
                 command: ReceiptsCommand::Verify,
             } => "receipts verify",
@@ -144,6 +151,14 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
                 }
             })
         }
+        Command::Status => {
+            status(&state)?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Run { rounds } => {
+            run::run(&state, rounds)?;
+            Ok(ExitCode::SUCCESS)
+        }
         Command::Whoami => {
             whoami(&state, kit.as_ref())?;
             Ok(ExitCode::SUCCESS)
@@ -153,6 +168,47 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
             Ok(ExitCode::from(EXIT_NOT_IMPLEMENTED))
         }
     }
+}
+
+/// `zone status`: one JSON object. `state` is `admitted`, `pending` or `not-joined`; times are
+/// ms since the epoch, null when unknown; `lastFailure` is a kind, never Core's text.
+fn status(state: &std::path::Path) -> Result<(), String> {
+    let (zone_id, pseudonym, membership, members) =
+        match device::open_existing(state, Arc::new(device::Offline))? {
+            None => (None, None, "not-joined", 0),
+            Some(d) => match device::identity(&d)? {
+                None => (None, None, "not-joined", 0),
+                Some(id) => {
+                    let members = d.members();
+                    let pseudonym = id.pseudonym.or_else(|| {
+                        members
+                            .iter()
+                            .find(|m| m.is_me)
+                            .map(|m| m.member_id.clone())
+                    });
+                    let membership = if d.status().admitted {
+                        "admitted"
+                    } else {
+                        "pending"
+                    };
+                    (Some(id.zone_id), pseudonym, membership, members.len())
+                }
+            },
+        };
+    let record = record::SyncRecord::load(state);
+    println!(
+        "{}",
+        serde_json::json!({
+            "zoneId": zone_id,
+            "pseudonym": pseudonym,
+            "state": membership,
+            "members": members,
+            "lastSyncMs": record.last_sync_ms,
+            "nextSyncMs": record.next_sync_ms,
+            "lastFailure": record.last_failure,
+        })
+    );
+    Ok(())
 }
 
 fn whoami(state: &std::path::Path, kit: Option<&secret::KitKey>) -> Result<(), String> {
