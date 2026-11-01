@@ -1,0 +1,110 @@
+{
+  "format": "bp-zone-receipt-v1",
+  "description": "One device's chain of zone action receipts (admit, admit-refused, remove, revoke). Each is an ES256 JWS, typ bp-zone-receipt+jws, kid = the actor device fingerprint, over {format, workspace_id, actor, action, subject, grant_id, reason, seq, prev, at_ms}; seq counts from 0 and prev is sha256: of the previous receipt's compact JWS (null at seq 0). Receipt i is at_ms = inputs.at_ms + i. first_payload_canonical is receipt 0's payload. Verifying the receipts listed by index in dropped, repeated or reordered as one chain from seq 0 must fail as a rollback; forged_jws (signed by another key under the actor's kid) must be refused.",
+  "cases": [
+    {
+      "inputs": {
+        "workspace_id": "wks_01K0000000000000000000000A",
+        "device": {
+          "label": "admitter",
+          "sign_seed": "0ff82c61696b915e6e639cd72e0c0f761bd2311e1160fa6f057e601ce6809d37",
+          "hpke_seed": "853cf61cdcfc0c32efb2d42ce1b1463401a78a5e3ea6faaa730e28aac8bc2ae4",
+          "bundle": {
+            "format": "bp-workspace-device-bundle-v1",
+            "bpid": "bp:self:b800e730d8ac88488a882b8a6113c74184653ecd6944894319fd6c8889194c36",
+            "generation": 1,
+            "signing_jwk": {
+              "kty": "EC",
+              "crv": "P-256",
+              "x": "O4Av6zoaHZG-TYWfFtrXu9Id6srBCKuNWyp4QGrEGrw",
+              "y": "cPgPRN5rqRGk9ToVI-uPH_RekdLb7olRSK-12X11QqE",
+              "alg": "ES256"
+            },
+            "hpke_public_key": "BJYBQLFeWqAjYK1QxlCEtS7HwQ_ZzXNMNZIg-xQl8-uFA2q69H32M0jt3K4MGwmU9t7icpwVEyyIaS48ZQWwFws",
+            "hpke_suite": {
+              "kem_id": 16,
+              "kdf_id": 1,
+              "aead_id": 2
+            },
+            "created_at": "2026-10-26T00:00:00.000Z"
+          },
+          "fingerprint": "sha256:624229680b4bd9dd3d56537fbcd535484ee8bc77e2784c243be0d5dc3c30921c"
+        },
+        "at_ms": 1793059200000,
+        "actions": [
+          {
+            "action": "admit",
+            "subject": "bp:self:525fd65685b06deb4f3a1b7af0e3bba08bd4789cc65c88746f3b64a291b001ab",
+            "grant_id": "agr_fixture",
+            "reason": null
+          },
+          {
+            "action": "admit-refused",
+            "subject": null,
+            "grant_id": null,
+            "reason": "kind-not-granted"
+          },
+          {
+            "action": "remove",
+            "subject": "bp:self:525fd65685b06deb4f3a1b7af0e3bba08bd4789cc65c88746f3b64a291b001ab",
+            "grant_id": null,
+            "reason": null
+          },
+          {
+            "action": "revoke",
+            "subject": "agr_fixture",
+            "grant_id": "agr_fixture",
+            "reason": null
+          }
+        ],
+        "dropped": [
+          0,
+          2,
+          3
+        ],
+        "repeated": [
+          0,
+          1,
+          1,
+          2
+        ],
+        "reordered": [
+          0,
+          2,
+          1,
+          3
+        ]
+      },
+      "first_payload_canonical": "{\"action\":\"admit\",\"actor\":\"sha256:624229680b4bd9dd3d56537fbcd535484ee8bc77e2784c243be0d5dc3c30921c\",\"at_ms\":1793059200000,\"format\":\"bp-zone-receipt-v1\",\"grant_id\":\"agr_fixture\",\"prev\":null,\"reason\":null,\"seq\":0,\"subject\":\"bp:self:525fd65685b06deb4f3a1b7af0e3bba08bd4789cc65c88746f3b64a291b001ab\",\"workspace_id\":\"wks_01K0000000000000000000000A\"}",
+      "signed": {
+        "receipts": [
+          {
+            "protected": "eyJhbGciOiJFUzI1NiIsInR5cCI6ImJwLXpvbmUtcmVjZWlwdCtqd3MiLCJraWQiOiJzaGEyNTY6NjI0MjI5NjgwYjRiZDlkZDNkNTY1MzdmYmNkNTM1NDg0ZWU4YmM3N2UyNzg0YzI0M2JlMGQ1ZGMzYzMwOTIxYyJ9",
+            "payload": "eyJhY3Rpb24iOiJhZG1pdCIsImFjdG9yIjoic2hhMjU2OjYyNDIyOTY4MGI0YmQ5ZGQzZDU2NTM3ZmJjZDUzNTQ4NGVlOGJjNzdlMjc4NGMyNDNiZTBkNWRjM2MzMDkyMWMiLCJhdF9tcyI6MTc5MzA1OTIwMDAwMCwiZm9ybWF0IjoiYnAtem9uZS1yZWNlaXB0LXYxIiwiZ3JhbnRfaWQiOiJhZ3JfZml4dHVyZSIsInByZXYiOm51bGwsInJlYXNvbiI6bnVsbCwic2VxIjowLCJzdWJqZWN0IjoiYnA6c2VsZjo1MjVmZDY1Njg1YjA2ZGViNGYzYTFiN2FmMGUzYmJhMDhiZDQ3ODljYzY1Yzg4NzQ2ZjNiNjRhMjkxYjAwMWFiIiwid29ya3NwYWNlX2lkIjoid2tzXzAxSzAwMDAwMDAwMDAwMDAwMDAwMDAwMDBBIn0",
+            "signature": "C27Vcmr4cbAEbn2GNTpziXyjCB-MeNacwR1Cb6abkV67lNLsvUDSkajg5RmH9-G9yva0jlpeL1184L3zi_cbbQ"
+          },
+          {
+            "protected": "eyJhbGciOiJFUzI1NiIsInR5cCI6ImJwLXpvbmUtcmVjZWlwdCtqd3MiLCJraWQiOiJzaGEyNTY6NjI0MjI5NjgwYjRiZDlkZDNkNTY1MzdmYmNkNTM1NDg0ZWU4YmM3N2UyNzg0YzI0M2JlMGQ1ZGMzYzMwOTIxYyJ9",
+            "payload": "eyJhY3Rpb24iOiJhZG1pdC1yZWZ1c2VkIiwiYWN0b3IiOiJzaGEyNTY6NjI0MjI5NjgwYjRiZDlkZDNkNTY1MzdmYmNkNTM1NDg0ZWU4YmM3N2UyNzg0YzI0M2JlMGQ1ZGMzYzMwOTIxYyIsImF0X21zIjoxNzkzMDU5MjAwMDAxLCJmb3JtYXQiOiJicC16b25lLXJlY2VpcHQtdjEiLCJncmFudF9pZCI6bnVsbCwicHJldiI6InNoYTI1Njo4MzAwN2E2YjQ0ODM0ZWEwOTJkZTNhMzQ1NzdlYTdiNGU2ZWExY2U2NTBjNmE3OWY2YjA1NmY2ODVhMGNjMmJiIiwicmVhc29uIjoia2luZC1ub3QtZ3JhbnRlZCIsInNlcSI6MSwic3ViamVjdCI6bnVsbCwid29ya3NwYWNlX2lkIjoid2tzXzAxSzAwMDAwMDAwMDAwMDAwMDAwMDAwMDBBIn0",
+            "signature": "EFWqCfFOdQKqDwpSULiAzGIP3vQrL1mhXwMYG__wzXSodympIjSoUaAMJaCZOOH6gZJSEC8jucdZmhBoF8d4sw"
+          },
+          {
+            "protected": "eyJhbGciOiJFUzI1NiIsInR5cCI6ImJwLXpvbmUtcmVjZWlwdCtqd3MiLCJraWQiOiJzaGEyNTY6NjI0MjI5NjgwYjRiZDlkZDNkNTY1MzdmYmNkNTM1NDg0ZWU4YmM3N2UyNzg0YzI0M2JlMGQ1ZGMzYzMwOTIxYyJ9",
+            "payload": "eyJhY3Rpb24iOiJyZW1vdmUiLCJhY3RvciI6InNoYTI1Njo2MjQyMjk2ODBiNGJkOWRkM2Q1NjUzN2ZiY2Q1MzU0ODRlZThiYzc3ZTI3ODRjMjQzYmUwZDVkYzNjMzA5MjFjIiwiYXRfbXMiOjE3OTMwNTkyMDAwMDIsImZvcm1hdCI6ImJwLXpvbmUtcmVjZWlwdC12MSIsImdyYW50X2lkIjpudWxsLCJwcmV2Ijoic2hhMjU2OmNiM2U4ZjZkZmE1NmNjNWYzYTZmMTNhZDFjNjU2MjA2ODY1MjJkZGU3MjNmNGUxNGQ3NjJjYzE2ZTRjNzkzZjkiLCJyZWFzb24iOm51bGwsInNlcSI6Miwic3ViamVjdCI6ImJwOnNlbGY6NTI1ZmQ2NTY4NWIwNmRlYjRmM2ExYjdhZjBlM2JiYTA4YmQ0Nzg5Y2M2NWM4ODc0NmYzYjY0YTI5MWIwMDFhYiIsIndvcmtzcGFjZV9pZCI6Indrc18wMUswMDAwMDAwMDAwMDAwMDAwMDAwMDAwQSJ9",
+            "signature": "ei8DmOnzPw76VMdn1SDjKrKU5oLkINHT5JH6TiWPQZnAnyfC6rYc8eobBhQufcWRZS3I39YcJWaWNHFOlsWzPw"
+          },
+          {
+            "protected": "eyJhbGciOiJFUzI1NiIsInR5cCI6ImJwLXpvbmUtcmVjZWlwdCtqd3MiLCJraWQiOiJzaGEyNTY6NjI0MjI5NjgwYjRiZDlkZDNkNTY1MzdmYmNkNTM1NDg0ZWU4YmM3N2UyNzg0YzI0M2JlMGQ1ZGMzYzMwOTIxYyJ9",
+            "payload": "eyJhY3Rpb24iOiJyZXZva2UiLCJhY3RvciI6InNoYTI1Njo2MjQyMjk2ODBiNGJkOWRkM2Q1NjUzN2ZiY2Q1MzU0ODRlZThiYzc3ZTI3ODRjMjQzYmUwZDVkYzNjMzA5MjFjIiwiYXRfbXMiOjE3OTMwNTkyMDAwMDMsImZvcm1hdCI6ImJwLXpvbmUtcmVjZWlwdC12MSIsImdyYW50X2lkIjoiYWdyX2ZpeHR1cmUiLCJwcmV2Ijoic2hhMjU2OjkyNzA5NTYxNTkwOGE3YjYwYWUxMGI2YzkzMDhlYjliNDhlZGI4ZjY1MmE4NjFiNzY2NWQ5ZjY3OTEzYTViN2QiLCJyZWFzb24iOm51bGwsInNlcSI6Mywic3ViamVjdCI6ImFncl9maXh0dXJlIiwid29ya3NwYWNlX2lkIjoid2tzXzAxSzAwMDAwMDAwMDAwMDAwMDAwMDAwMDBBIn0",
+            "signature": "VKTgKYvJy8mluFM5hHDMYmxccF-1vuMD8UaE5mXwuqAJk3mJKgpR6Kd1CWug0V27HPLGdci621omQZJ6V0uolw"
+          }
+        ],
+        "forged_jws": {
+          "protected": "eyJhbGciOiJFUzI1NiIsInR5cCI6ImJwLXpvbmUtcmVjZWlwdCtqd3MiLCJraWQiOiJzaGEyNTY6NjI0MjI5NjgwYjRiZDlkZDNkNTY1MzdmYmNkNTM1NDg0ZWU4YmM3N2UyNzg0YzI0M2JlMGQ1ZGMzYzMwOTIxYyJ9",
+          "payload": "eyJhY3Rpb24iOiJhZG1pdCIsImFjdG9yIjoic2hhMjU2OjYyNDIyOTY4MGI0YmQ5ZGQzZDU2NTM3ZmJjZDUzNTQ4NGVlOGJjNzdlMjc4NGMyNDNiZTBkNWRjM2MzMDkyMWMiLCJhdF9tcyI6MTc5MzA1OTIwMDAwMCwiZm9ybWF0IjoiYnAtem9uZS1yZWNlaXB0LXYxIiwiZ3JhbnRfaWQiOiJhZ3JfZml4dHVyZSIsInByZXYiOm51bGwsInJlYXNvbiI6bnVsbCwic2VxIjowLCJzdWJqZWN0IjoiYnA6c2VsZjo1MjVmZDY1Njg1YjA2ZGViNGYzYTFiN2FmMGUzYmJhMDhiZDQ3ODljYzY1Yzg4NzQ2ZjNiNjRhMjkxYjAwMWFiIiwid29ya3NwYWNlX2lkIjoid2tzXzAxSzAwMDAwMDAwMDAwMDAwMDAwMDAwMDBBIn0",
+          "signature": "49DpRhLisKHBlzginDclhzhQxk3YjzED3tVcpFtJ3MRhfPWqPPo-CobqR0t9if7HU785YTDF-N27zwIChcJUTA"
+        }
+      }
+    }
+  ]
+}

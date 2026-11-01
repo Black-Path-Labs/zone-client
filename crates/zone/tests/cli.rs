@@ -1,6 +1,6 @@
-//! The CLI surface: help, version, the not-implemented exit code of every subcommand that has
-//! not landed yet, and `status` and `run` before any join. `zone join` has its own tests
-//! (join.rs); status and run against a joined zone run in `scripts/smoke.sh`.
+//! The CLI surface: help, version, and `status`, `run` and `receipts verify` before any join.
+//! `zone join` has its own tests (join.rs); status and run against a joined zone are the server
+//! repo's e2e, and receipts.rs checks receipts from a file.
 
 use std::process::{Command, Output};
 
@@ -37,11 +37,17 @@ fn version_names_the_sdk_revision_from_the_lock() {
 }
 
 #[test]
-fn unimplemented_subcommands_exit_2() {
-    let out = zone(&["receipts", "verify"]);
-    assert_eq!(out.status.code(), Some(2));
+fn receipts_verify_before_any_join_names_the_way_out_and_makes_no_state() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = tmp.path().join("zone");
+    let out = zone_in(&state, &["receipts", "verify"]);
+    assert_eq!(out.status.code(), Some(1));
     let err = String::from_utf8(out.stderr).unwrap();
-    assert!(err.contains("not implemented"), "{err}");
+    assert!(
+        err.contains("no zone joined") && err.contains("--file"),
+        "{err}"
+    );
+    assert!(!state.exists());
 }
 
 fn zone_in(state: &std::path::Path, args: &[&str]) -> Output {
