@@ -100,12 +100,15 @@ pub fn identity(device: &ZoneDevice) -> Result<Option<Identity>, String> {
         return Ok(None);
     };
     let device_fingerprint = device.device_fingerprint().map_err(|e| e.to_string())?;
-    let pseudonym = device
-        .zone_devices()
-        .map_err(|e| e.to_string())?
-        .into_iter()
-        .find(|(fp, _)| *fp == device_fingerprint)
-        .map(|(_, bpid)| bpid);
+    // A device still waiting for admission has no verified roster yet, so no pseudonym.
+    let pseudonym = match device.zone_devices() {
+        Ok(devices) => devices
+            .into_iter()
+            .find(|(fp, _)| *fp == device_fingerprint)
+            .map(|(_, bpid)| bpid),
+        Err(ZoneError::NotAdmitted) => None,
+        Err(e) => return Err(e.to_string()),
+    };
     Ok(Some(Identity {
         zone_id,
         device_fingerprint,
