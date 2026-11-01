@@ -1,0 +1,27 @@
+[workspace]
+resolver = "2"
+members = ["crates/zone"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.99"
+license = "Apache-2.0 OR MIT"
+repository = "https://github.com/Black-Path-Labs/zone-client"
+publish = false
+
+# The zone SDK, pinned to one zone-sdk commit. `zone --version` reports this revision; bump it
+# here and in Cargo.lock together.
+[workspace.dependencies]
+bp-workspace-core = { git = "https://github.com/Black-Path-Labs/zone-sdk", rev = "e02891aeb3c8a844cb6f3d5b8a67ff0e2b8d2898" }
+bp-zone-core = { git = "https://github.com/Black-Path-Labs/zone-sdk", rev = "e02891aeb3c8a844cb6f3d5b8a67ff0e2b8d2898" }
+bp-zone-rtc = { git = "https://github.com/Black-Path-Labs/zone-sdk", rev = "e02891aeb3c8a844cb6f3d5b8a67ff0e2b8d2898" }
+
+# The SDK's RustCrypto arithmetic is built optimised even in test builds, as in zone-sdk.
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.release]
+lto = true
+strip = true
+codegen-units = 1
