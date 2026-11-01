@@ -1,4 +1,5 @@
-//! The CLI surface: help, version, and the not-implemented exit code of every subcommand.
+//! The CLI surface: help, version, and the not-implemented exit code of every subcommand that
+//! has not landed yet.
 
 use std::process::{Command, Output};
 
@@ -41,7 +42,6 @@ fn unimplemented_subcommands_exit_2() {
         &["status"],
         &["run"],
         &["receipts", "verify"],
-        &["whoami"],
     ] {
         let out = zone(args);
         assert_eq!(out.status.code(), Some(2), "zone {args:?}");

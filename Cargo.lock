@@ -1748,8 +1748,13 @@ checksum = "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"
 name = "zone"
 version = "0.1.0"
 dependencies = [
+ "aes-gcm",
  "bp-workspace-core",
  "bp-zone-core",
  "bp-zone-rtc",
  "clap",
+ "libc",
+ "rand_core 0.6.4",
+ "tempfile",
+ "zeroize",
 ]
