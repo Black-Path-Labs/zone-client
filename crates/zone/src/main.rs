@@ -10,6 +10,7 @@ use clap::{Parser, Subcommand};
 mod backoff;
 mod device;
 mod join;
+mod receipts;
 mod record;
 mod run;
 mod secret;
@@ -17,12 +18,12 @@ mod state;
 mod transport;
 mod vault;
 
-/// Exit code of a subcommand that is not implemented yet.
-const EXIT_NOT_IMPLEMENTED: u8 = 2;
 /// `zone join`: the SDK or Core refused; stderr names the reason kind.
 const EXIT_REFUSED: u8 = 3;
 /// `zone join --timeout`: not admitted in time. `zone join` again resumes the wait.
 const EXIT_TIMED_OUT: u8 = 4;
+/// `zone receipts verify`: a receipt or a chain did not verify; stderr names each.
+const EXIT_UNVERIFIED: u8 = 5;
 
 const VERSION: &str = concat!(
     env!("CARGO_PKG_VERSION"),
@@ -80,22 +81,14 @@ enum Command {
 
 #[derive(Subcommand)]
 enum ReceiptsCommand {
-    /// Verify receipts against the zone's keys.
-    Verify,
-}
-
-impl Command {
-    fn name(&self) -> &'static str {
-        match self {
-            Command::Join { .. } => "join",
-            Command::Status => "status",
-            Command::Run { .. } => "run",
-            Command::Receipts {
-                command: ReceiptsCommand::Verify,
-            } => "receipts verify",
-            Command::Whoami => "whoami",
-        }
-    }
+    /// Verify the zone's signed action receipts and each actor's chain, offline. Exit 5 names the
+    /// actor and seq of each receipt that is bad, dropped, repeated or out of order.
+    Verify {
+        /// Check the receipts in FILE (`{workspace_id, devices, receipts}`) instead of the
+        /// joined zone's. Its devices are trusted as given.
+        #[arg(long, value_name = "FILE")]
+        file: Option<PathBuf>,
+    },
 }
 
 fn main() -> ExitCode {
@@ -159,14 +152,40 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
             run::run(&state, rounds)?;
             Ok(ExitCode::SUCCESS)
         }
+        Command::Receipts {
+            command: ReceiptsCommand::Verify { file },
+        } => {
+            let input = match file {
+                Some(f) => receipts::from_file(&f)?,
+                None => receipts::from_state(&state)?,
+            };
+            Ok(verify_receipts(&input))
+        }
         Command::Whoami => {
             whoami(&state, kit.as_ref())?;
             Ok(ExitCode::SUCCESS)
         }
-        other => {
-            eprintln!("zone {}: not implemented yet", other.name());
-            Ok(ExitCode::from(EXIT_NOT_IMPLEMENTED))
-        }
+    }
+}
+
+/// `zone receipts verify`: one line per verified chain on stdout, one per failure on stderr.
+fn verify_receipts(input: &receipts::Input) -> ExitCode {
+    let (chains, failures) = receipts::verify(input);
+    for c in &chains {
+        println!(
+            "ok {} seq {}..={} ({} receipts)",
+            c.actor, c.first_seq, c.last_seq, c.count
+        );
+    }
+    for f in &failures {
+        eprintln!("zone receipts verify: {f}");
+    }
+    if failures.is_empty() {
+        let n: usize = chains.iter().map(|c| c.count).sum();
+        println!("verified {n} receipts in {} chains", chains.len());
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(EXIT_UNVERIFIED)
     }
 }
 
