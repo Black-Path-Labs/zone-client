@@ -20,4 +20,4 @@ if [ -z "${qemu}" ]; then
 fi
 
 export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_RUNNER="${qemu}"
-cargo zigbuild test --locked --target "${target}" --bin zone
+cargo-zigbuild test --locked --target "${target}" --bin zone
