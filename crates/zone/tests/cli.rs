@@ -38,12 +38,10 @@ fn version_names_the_sdk_revision_from_the_lock() {
 
 #[test]
 fn unimplemented_subcommands_exit_2() {
-    for args in [&["receipts", "verify"][..]] {
-        let out = zone(args);
-        assert_eq!(out.status.code(), Some(2), "zone {args:?}");
-        let err = String::from_utf8(out.stderr).unwrap();
-        assert!(err.contains("not implemented"), "zone {args:?}: {err}");
-    }
+    let out = zone(&["receipts", "verify"]);
+    assert_eq!(out.status.code(), Some(2));
+    let err = String::from_utf8(out.stderr).unwrap();
+    assert!(err.contains("not implemented"), "{err}");
 }
 
 fn zone_in(state: &std::path::Path, args: &[&str]) -> Output {
