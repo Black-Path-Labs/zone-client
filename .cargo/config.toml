@@ -1,0 +1,3 @@
+# Fetch git dependencies with the git CLI so its credential helper works while zone-sdk is private.
+[net]
+git-fetch-with-cli = true
