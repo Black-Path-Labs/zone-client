@@ -126,7 +126,8 @@ fn installs_the_release_into_an_empty_home_and_joins() {
     let all = text(&out);
     assert!(out.status.success(), "{all}");
     assert!(
-        all.lines()
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
             .last()
             .unwrap()
             .starts_with(&format!("smoke: PASS {TAG} (zone 0.1.0 (")),
