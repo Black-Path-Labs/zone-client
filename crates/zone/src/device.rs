@@ -50,7 +50,6 @@ pub fn open_existing(
 }
 
 /// The device in `dir`, made on first use with `core_url` and `core_zone` as where new zones go.
-#[allow(dead_code)] // `zone join` creates the device with the zone's Core.
 pub fn open_or_create(
     dir: &Path,
     core_url: &str,

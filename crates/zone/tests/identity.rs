@@ -87,7 +87,10 @@ fn zone(state: &Path, args: &[&str], stdin: Option<&[u8]>) -> Output {
         .spawn()
         .expect("run zone");
     let mut pipe = child.stdin.take().unwrap();
-    pipe.write_all(stdin.unwrap_or_default()).unwrap();
+    // `--help`, `--version` and early refusals exit without reading stdin: a closed pipe is fine.
+    if let Err(e) = pipe.write_all(stdin.unwrap_or_default()) {
+        assert_eq!(e.kind(), std::io::ErrorKind::BrokenPipe, "{e}");
+    }
     drop(pipe);
     child.wait_with_output().unwrap()
 }

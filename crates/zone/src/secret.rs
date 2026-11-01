@@ -66,8 +66,7 @@ impl KitKey {
         Ok(KitKey { seed })
     }
 
-    /// The secret, for the SDK call that signs with it.
-    #[allow(dead_code)] // `zone join --kit` passes it to `request_admission`.
+    /// The secret, for the SDK call that signs with it (`request_admission`).
     pub fn seed(&self) -> &[u8] {
         &self.seed
     }

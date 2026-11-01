@@ -7,13 +7,20 @@ use std::sync::Arc;
 
 use clap::{Parser, Subcommand};
 
+mod backoff;
 mod device;
+mod join;
 mod secret;
 mod state;
+mod transport;
 mod vault;
 
 /// Exit code of a subcommand that is not implemented yet.
 const EXIT_NOT_IMPLEMENTED: u8 = 2;
+/// `zone join`: the SDK or Core refused; stderr names the reason kind.
+const EXIT_REFUSED: u8 = 3;
+/// `zone join --timeout`: not admitted in time. `zone join` again resumes the wait.
+const EXIT_TIMED_OUT: u8 = 4;
 
 const VERSION: &str = concat!(
     env!("CARGO_PKG_VERSION"),
@@ -37,10 +44,19 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Join a zone with an invite link or a join token.
+    /// Join a zone with an invite link or a zone code, and wait until admitted.
     Join {
-        /// The invite link or join token.
+        /// The invite link (`bpzi1.…`, or the web app's `…#join=bpzi1.…`) or zone code (`bpzc1.…`).
         invite: String,
+        /// Ask the zone's admitter to admit this device, signed with the kit key (`--key-file`).
+        #[arg(long)]
+        kit: bool,
+        /// Return once joined (and, with `--kit`, asked) instead of waiting for admission.
+        #[arg(long)]
+        no_wait: bool,
+        /// Stop waiting after SECS (exit 4).
+        #[arg(long, value_name = "SECS")]
+        timeout: Option<u64>,
     },
     /// Show this device's zones and their state.
     Status,
@@ -96,6 +112,38 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
         .map(secret::KitKey::read)
         .transpose()?;
     match cli.command {
+        Command::Join {
+            invite,
+            kit: with_kit,
+            no_wait,
+            timeout,
+        } => {
+            let kit = match (with_kit, kit.as_ref()) {
+                (true, None) => return Err("join --kit needs the kit key: --key-file FILE".into()),
+                (true, Some(k)) => Some(k),
+                (false, _) => None,
+            };
+            let outcome = join::run(
+                &state,
+                join::Options {
+                    code: &invite,
+                    kit,
+                    wait: !no_wait,
+                    timeout: timeout.map(std::time::Duration::from_secs),
+                },
+            )?;
+            Ok(match outcome {
+                join::Outcome::Done => ExitCode::SUCCESS,
+                join::Outcome::Refused { kind, message } => {
+                    eprintln!("zone join: refused ({kind}): {message}");
+                    ExitCode::from(EXIT_REFUSED)
+                }
+                join::Outcome::TimedOut => {
+                    eprintln!("zone join: not admitted yet; `zone join` again resumes the wait");
+                    ExitCode::from(EXIT_TIMED_OUT)
+                }
+            })
+        }
         Command::Whoami => {
             whoami(&state, kit.as_ref())?;
             Ok(ExitCode::SUCCESS)

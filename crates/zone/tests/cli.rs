@@ -1,5 +1,5 @@
 //! The CLI surface: help, version, and the not-implemented exit code of every subcommand that
-//! has not landed yet.
+//! has not landed yet. `zone join` has its own tests (join.rs).
 
 use std::process::{Command, Output};
 
@@ -37,12 +37,7 @@ fn version_names_the_sdk_revision_from_the_lock() {
 
 #[test]
 fn unimplemented_subcommands_exit_2() {
-    for args in [
-        &["join", "zone-invite-placeholder"][..],
-        &["status"],
-        &["run"],
-        &["receipts", "verify"],
-    ] {
+    for args in [&["status"][..], &["run"], &["receipts", "verify"]] {
         let out = zone(args);
         assert_eq!(out.status.code(), Some(2), "zone {args:?}");
         let err = String::from_utf8(out.stderr).unwrap();
