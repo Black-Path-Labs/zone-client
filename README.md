@@ -153,6 +153,12 @@ zone admits the device and prints `joined <zone> as <pseudonym>`.
   signed with the kit key, so admission needs no human step. The kit key is 32 bytes or 64 hex
   digits in a file of mode 0600, or on stdin with `--key-file -`. It is never read from the
   command line or the environment.
+- With a join address (`za_…`, which the zone's owner publishes), `zone join` asks Core for the
+  zone code behind it, checks that the code hashes to the address, and joins as with that zone
+  code. With `--kit` that is the whole self-service join, no invite needed:
+  `zone join --kit --key-file kit.key za_…`. `--core URL` names the Core to ask (default
+  `https://zone.blackpathlabs.com`). The address is not secret, so an argument draws no warning.
+  The admitter still admits only within the owner's grant.
 
 `--no-wait` returns once joined (and, with `--kit`, asked). `--timeout SECS` stops waiting after
 SECS and exits 4. Running `zone join` again with the same invite resumes the wait. While it waits,

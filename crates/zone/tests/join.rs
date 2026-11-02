@@ -9,7 +9,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
 
-use bp_workspace_core::space::ZoneCode;
+use bp_workspace_core::space::{join_address, ZoneCode};
 
 /// A zone code for a Core nobody listens on (port 9, discard).
 fn unreachable_zone_code() -> String {
@@ -172,5 +172,85 @@ fn invite_sources_that_cannot_work_are_refused_before_any_state() {
     let out = zone_stdin(&state, &["join", "-"], b"\n");
     assert_eq!(out.status.code(), Some(1), "{out:?}");
     assert!(String::from_utf8_lossy(&out.stderr).contains("stdin: empty"));
+    assert!(!state.exists());
+}
+
+/// A one-request Core on 127.0.0.1 that answers `GET /v1/join-addresses/<address>` with
+/// `status` and `body`, and hands back the request line it got.
+fn fake_core(status: u16, body: String) -> (String, std::thread::JoinHandle<String>) {
+    use std::io::{BufRead, BufReader};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let served = std::thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        let mut header = String::new();
+        while reader.read_line(&mut header).unwrap() > 2 {
+            header.clear();
+        }
+        let mut stream = stream;
+        write!(
+            stream,
+            "HTTP/1.1 {status} X\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+            body.len()
+        )
+        .unwrap();
+        line.trim().to_owned()
+    });
+    (url, served)
+}
+
+#[test]
+fn a_join_address_is_resolved_at_core_and_checked_before_any_state() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = tmp.path().join("zone");
+    let code = unreachable_zone_code();
+    let address = join_address(&code);
+
+    // The zone code the address stands for: the join goes on to that zone's (unreachable) Core.
+    let body = format!(r#"{{"address":"{address}","zoneCode":"{code}"}}"#);
+    let (core, served) = fake_core(200, body);
+    let out = zone(&state, &["join", "--no-wait", "--core", &core, &address]);
+    assert_eq!(
+        served.join().unwrap(),
+        format!("GET /v1/join-addresses/{address} HTTP/1.1")
+    );
+    assert_eq!(out.status.code(), Some(1), "{out:?}");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("Core unreachable"), "{err}");
+    // A join address is not secret: no warning about the command line.
+    assert!(!err.contains("shell history"), "{err}");
+
+    // A code that does not hash to the address is refused, and nothing is made.
+    let other = ZoneCode {
+        workspace_id: format!("wks_{}", "3".repeat(26)),
+        ..ZoneCode::decode(&code).unwrap()
+    }
+    .encode()
+    .unwrap();
+    let state = tmp.path().join("zone-2");
+    let body = format!(r#"{{"address":"{address}","zoneCode":"{other}"}}"#);
+    let (core, served) = fake_core(200, body);
+    let out = zone(&state, &["join", "--core", &core, &address]);
+    served.join().unwrap();
+    assert_eq!(out.status.code(), Some(3), "{out:?}");
+    assert!(String::from_utf8_lossy(&out.stderr).contains("does not hash"));
+    assert!(!state.exists());
+
+    // An address nobody publishes is Core's 404: refused, nothing made.
+    let body = r#"{"error":{"code":"NO_PATH","message":"no such workspace resource"}}"#;
+    let (core, served) = fake_core(404, body.to_owned());
+    let out = zone(&state, &["join", "--core", &core, &address]);
+    served.join().unwrap();
+    assert_eq!(out.status.code(), Some(3), "{out:?}");
+    assert!(String::from_utf8_lossy(&out.stderr).contains("core-404"));
+    assert!(!state.exists());
+
+    // A Core that cannot be reached fails the join with exit 1.
+    let out = zone(&state, &["join", "--core", "http://127.0.0.1:9", &address]);
+    assert_eq!(out.status.code(), Some(1), "{out:?}");
+    assert!(String::from_utf8_lossy(&out.stderr).contains("Core unreachable"));
     assert!(!state.exists());
 }

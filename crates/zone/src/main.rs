@@ -24,6 +24,8 @@ const EXIT_REFUSED: u8 = 3;
 const EXIT_TIMED_OUT: u8 = 4;
 /// `zone receipts verify`: a receipt or a chain did not verify; stderr names each.
 const EXIT_UNVERIFIED: u8 = 5;
+/// The Core `zone join` asks for a join address's zone code; the zone code names the Core after.
+const DEFAULT_CORE: &str = "https://zone.blackpathlabs.com";
 
 const VERSION: &str = concat!(
     env!("CARGO_PKG_VERSION"),
@@ -47,12 +49,12 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Join a zone with an invite link or a zone code, and wait until admitted. Pass the invite
-    /// on stdin (`zone join -`) or in a file (`--invite-file`): an argument shows in shell
-    /// history and process listings.
+    /// Join a zone with an invite link, a zone code or a join address, and wait until admitted.
+    /// Pass an invite on stdin (`zone join -`) or in a file (`--invite-file`): an argument shows
+    /// in shell history and process listings. A join address is not secret.
     Join {
-        /// The invite link (`bpzi1.…`, or the web app's `…#join=bpzi1.…`) or zone code (`bpzc1.…`),
-        /// or `-` to read it from stdin.
+        /// The invite link (`bpzi1.…`, or the web app's `…#join=bpzi1.…`), zone code (`bpzc1.…`)
+        /// or join address (`za_…`), or `-` to read it from stdin.
         #[arg(
             required_unless_present = "invite_file",
             conflicts_with = "invite_file"
@@ -61,6 +63,9 @@ enum Command {
         /// Read the invite from FILE (mode 0600).
         #[arg(long, value_name = "FILE")]
         invite_file: Option<PathBuf>,
+        /// The Core that resolves a join address (`za_…`).
+        #[arg(long, value_name = "URL", default_value = DEFAULT_CORE)]
+        core: String,
         /// Ask the zone's admitter to admit this device, signed with the kit key (`--key-file`).
         #[arg(long)]
         kit: bool,
@@ -125,6 +130,7 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
         Command::Join {
             invite,
             invite_file,
+            core,
             kit: with_kit,
             no_wait,
             timeout,
@@ -146,6 +152,9 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
                     }
                     secret::read_invite(std::path::Path::new("-"))?
                 }
+                (Some(code), None) if bp_workspace_core::space::is_join_address(code.trim()) => {
+                    zeroize::Zeroizing::new(code.to_owned())
+                }
                 (Some(code), None) => {
                     eprintln!(
                         "zone join: an invite on the command line shows in shell history and \
@@ -159,6 +168,7 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
                 &state,
                 join::Options {
                     code: &invite,
+                    core: &core,
                     kit,
                     wait: !no_wait,
                     timeout: timeout.map(std::time::Duration::from_secs),
