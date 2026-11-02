@@ -88,7 +88,8 @@ fn run(mac: &Mac, args: &[&str], env: &[(&str, &str)]) -> Output {
         .env("ZONE_MACOS_IDENTITY", IDENTITY)
         .env("ZONE_NOTARY_PROFILE", "zone-notary")
         .env("ZONE_UNSIGNED", "1")
-        .env_remove("ZONE_IDENTITY_TOKEN")
+        .env_remove("ZONE_COSIGN_KEY")
+        .env_remove("ZONE_COSIGN_PASSWORD_FILE")
         .env_remove("NOTARY")
         .env_remove("GH_DRAFT")
         .env_remove("FAKE_UNAME");
@@ -274,14 +275,14 @@ fn release_mode_refuses_a_published_release() {
 }
 
 #[test]
-fn release_mode_keeps_signed_sums_signed() {
+fn release_mode_signs_the_new_sums_with_the_release_key() {
     let mac = mac();
     let assets = dist(mac.tmp.path());
     fs::write(assets.join("SHA256SUMS"), "stale").unwrap();
-    fs::write(assets.join("SHA256SUMS.sigstore.json"), "stale").unwrap();
+    fs::write(assets.join("SHA256SUMS.cosign.bundle"), "stale").unwrap();
     let a = assets.to_str().unwrap();
     let cosign = common::cosign(&mac.bin);
-    let token = common::token(mac.tmp.path(), common::IDENTITY, true, "google");
+    let key = common::key(mac.tmp.path(), "release");
 
     let out = run(
         &mac,
@@ -291,7 +292,12 @@ fn release_mode_keeps_signed_sums_signed() {
             ("GH_ASSETS", a),
             ("ZONE_UNSIGNED", "1"),
             ("ZONE_COSIGN", cosign.to_str().unwrap()),
-            ("ZONE_IDENTITY_TOKEN", token.to_str().unwrap()),
+            ("ZONE_COSIGN_KEY", key.private.to_str().unwrap()),
+            (
+                "ZONE_COSIGN_PASSWORD_FILE",
+                key.password_file.to_str().unwrap(),
+            ),
+            ("ZONE_COSIGN_PUB", key.public.to_str().unwrap()),
         ],
     );
     ok(&out);
@@ -300,7 +306,7 @@ fn release_mode_keeps_signed_sums_signed() {
         .lines()
         .find(|l| l.starts_with("gh release upload v0.1.0-rc.4 --clobber "))
         .unwrap_or_else(|| panic!("{log}"));
-    assert!(upload.ends_with("/SHA256SUMS.sigstore.json"), "{upload}");
+    assert!(upload.ends_with("/SHA256SUMS.cosign.bundle"), "{upload}");
     assert!(
         log.contains("gh release delete-asset v0.1.0-rc.4 UNSIGNED"),
         "{log}"

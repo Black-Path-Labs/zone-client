@@ -28,8 +28,9 @@ Ask a zone's owner for `<invite>`. There is no published release yet: the releas
 drafts until they are signed and approved.
 
 `install.sh` downloads the binary for this machine, `SHA256SUMS` and its signature, checks the
-signature when `cosign` is installed (otherwise it prints the command to check it), checks the
-sum and installs to `~/.local/bin/zone`. It never uses sudo. It refuses an unsigned release
+signature against the release key with `cosign`, or with `openssl` when cosign is not installed
+(with neither, it prints the command to check it), checks the sum and installs to
+`~/.local/bin/zone`. It never uses sudo. It refuses an unsigned release
 unless `ZONE_ALLOW_UNSIGNED=1`. `ZONE_VERSION=v0.1.0` pins a release and `ZONE_INSTALL_DIR`
 replaces `~/.local/bin`. `ZONE_GH=1` downloads with `gh release download` and gh's login, which
 also reaches a draft release.
@@ -101,24 +102,28 @@ profile's ACL limits to the user, SYSTEM and Administrators.
 
 ## Verify a download
 
-Each release carries `SHA256SUMS` over every file in it and `SHA256SUMS.sigstore.json`, a
-[cosign](https://docs.sigstore.dev/cosign/) keyless signature of it. Keyless means there is no
-long-lived key to steal: the signer signs in, Sigstore's certificate authority (Fulcio) issues a
-short-lived certificate for that identity, and the signature is recorded in Sigstore's public
-transparency log (Rekor). Every release is signed by one identity, `admin@blackpathlabs.com`,
-signed in through Google. Check the signature against that identity, then the binary you
-downloaded:
+Each release carries `SHA256SUMS` over every file in it and `SHA256SUMS.cosign.bundle`, a
+[cosign](https://docs.sigstore.dev/cosign/) signature of it by the release key. The public half
+of that key is [`cosign.pub`](cosign.pub) in this repository; take it from here, not from the
+release. Signatures are not recorded in a transparency log, so cosign is told not to look for an
+entry (and warns that it skipped it). Check the signature, then the binary you downloaded:
 
 ```sh
-cosign verify-blob --bundle SHA256SUMS.sigstore.json \
-  --certificate-identity admin@blackpathlabs.com \
-  --certificate-oidc-issuer https://accounts.google.com SHA256SUMS
+cosign verify-blob --key cosign.pub --bundle SHA256SUMS.cosign.bundle \
+  --insecure-ignore-tlog=true SHA256SUMS
 sha256sum -c --ignore-missing SHA256SUMS
 ```
 
-A signature by any other identity, or from any other issuer, is not a release signature. A draft
-that is not signed yet carries `UNSIGNED` in place of `SHA256SUMS.sigstore.json`, and only its
-sums can be checked.
+The signature is ECDSA P-256 over `SHA256SUMS` itself, so `openssl` checks it too:
+
+```sh
+sed -n 's/.*"signature": *"\([A-Za-z0-9+/=]*\)".*/\1/p' SHA256SUMS.cosign.bundle |
+  openssl base64 -d -A >SHA256SUMS.sig
+openssl dgst -sha256 -verify cosign.pub -signature SHA256SUMS.sig SHA256SUMS
+```
+
+A signature by any other key is not a release signature. A draft that is not signed yet carries
+`UNSIGNED` in place of `SHA256SUMS.cosign.bundle`, and only its sums can be checked.
 
 To check a whole `dist` directory, `scripts/verify.sh dist` (or `--allow-unsigned` for an
 unsigned one). `scripts/release-tools.sh <dir>` fetches the pinned cosign 3.1.4 and prints the
@@ -243,17 +248,18 @@ runs `scripts/check.sh`, builds the Linux (x86_64, arm64), macOS (x86_64, arm64)
 refuses a dirty tree or a tag or release that exists. A draft is published only with a recorded
 approval: `ZONE_RELEASE_APPROVED=<approval id> scripts/release.sh --publish v0.1.0-rc.1`.
 
-Signing needs no key file and no CI. `scripts/sign.sh` prints a Sigstore sign-in URL and a code;
-open it on any device, choose Google and sign in as `admin@blackpathlabs.com`. The script checks
-the token's email before anything is signed, so no other identity ever reaches the public log,
-and then verifies the new signature against that identity. With `ZONE_UNSIGNED=1` the draft is
-uploaded with `UNSIGNED`; `scripts/sign.sh --release v0.1.0-rc.1` signs it later in place.
+Signing needs the release key and no CI. The encrypted private key stays on the signing machine;
+`scripts/sign.sh` reads its path from `ZONE_COSIGN_KEY` and its passphrase from
+`COSIGN_PASSWORD` or the file `ZONE_COSIGN_PASSWORD_FILE` names. Nothing goes to a transparency
+log. The script then verifies the new signature against `cosign.pub`, so a key that is not the
+published one fails. With `ZONE_UNSIGNED=1` the draft is uploaded with `UNSIGNED`;
+`scripts/sign.sh --release v0.1.0-rc.1` signs it later in place.
 
 On a Mac with the Developer ID Application certificate and a `notarytool` keychain profile,
 `scripts/macos-sign.sh --release v0.1.0-rc.1` signs the draft's macOS binaries (hardened runtime,
 secure timestamp), has Apple notarize them and uploads them with a new `SHA256SUMS` in their
-place. It needs `ZONE_MACOS_IDENTITY` and `ZONE_NOTARY_PROFILE`, and the release identity's
-sign-in when the draft's sums are signed. A bare binary cannot be stapled, so Gatekeeper checks
+place. It needs `ZONE_MACOS_IDENTITY` and `ZONE_NOTARY_PROFILE`. Without the release key on the
+Mac the new sums stay `UNSIGNED`, for `scripts/sign.sh --release` on the signing machine. A bare binary cannot be stapled, so Gatekeeper checks
 the notarization online the first time it runs.
 
 `scripts/repro.sh x86_64-unknown-linux-musl` builds a target twice from nothing and fails unless

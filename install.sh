@@ -1,20 +1,24 @@
 #!/bin/sh
 # Installs the `zone` client: downloads the release binary for this OS and CPU with its
-# SHA256SUMS, checks the sum (and the cosign keyless signature of SHA256SUMS when cosign is
-# installed) and puts it in ~/.local/bin/zone. It never uses sudo.
+# SHA256SUMS, checks the signature of SHA256SUMS against the release key (with cosign, or with
+# openssl when cosign is not installed) and the binary's sum, and puts it in ~/.local/bin/zone.
+# It never uses sudo.
 #
 #   curl -fsSL https://github.com/Black-Path-Labs/zone-client/releases/latest/download/install.sh | sh
 #   curl -fsSL .../install.sh | ZONE_VERSION=v0.1.0 sh      # a pinned release
 #
 # ZONE_INSTALL_DIR replaces ~/.local/bin. ZONE_GH=1 downloads with `gh release download`, which
 # also reaches a private repository or a draft release with gh's login. An unsigned release is
-# refused unless ZONE_ALLOW_UNSIGNED=1.
+# refused unless ZONE_ALLOW_UNSIGNED=1. ZONE_COSIGN_PUB replaces the release key (tests).
 set -eu
 
 repo="Black-Path-Labs/zone-client"
-# Who signs releases: cosign keyless (Sigstore), this identity, signed in through this issuer.
-identity="admin@blackpathlabs.com"
-issuer="https://accounts.google.com"
+# The release key: cosign.pub in the repository. Releases are signed with cosign and no
+# transparency log entry.
+release_key="-----BEGIN PUBLIC KEY-----
+MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE9ZhqkzNFhmlDIQ/ge7Z3WmXb0zxF
+U/JP3rZ6s5hwWi9O6OVRS2GytBUEvoHmrA+wdaPSRnxWUkrD3ULPayjFlw==
+-----END PUBLIC KEY-----"
 
 fail() {
   echo "zone install: $*" >&2
@@ -62,11 +66,11 @@ fetch() {
 
 if [ "${ZONE_GH:-}" = 1 ]; then
   gh release download ${version:+"${version}"} -R "${repo}" -D "${tmp}" \
-    -p SHA256SUMS -p 'SHA256SUMS.sigstore.json' -p "zone-*-${target}" ||
+    -p SHA256SUMS -p 'SHA256SUMS.cosign.bundle' -p "zone-*-${target}" ||
     fail "gh release download failed"
 else
   fetch SHA256SUMS || fail "cannot download SHA256SUMS"
-  fetch SHA256SUMS.sigstore.json 2>/dev/null || rm -f "${tmp}/SHA256SUMS.sigstore.json"
+  fetch SHA256SUMS.cosign.bundle 2>/dev/null || rm -f "${tmp}/SHA256SUMS.cosign.bundle"
 fi
 
 name="$(sed -n "s/^[0-9a-f]\{64\}  \(zone-[^ ]*-${target}\)\$/\1/p" "${tmp}/SHA256SUMS" | head -1)"
@@ -77,18 +81,30 @@ if [ "${ZONE_GH:-}" != 1 ]; then
 fi
 [ -f "${tmp}/${name}" ] || fail "the release has no ${name}"
 
-verify="cosign verify-blob --bundle SHA256SUMS.sigstore.json --certificate-identity ${identity} --certificate-oidc-issuer ${issuer} SHA256SUMS"
-if [ ! -f "${tmp}/SHA256SUMS.sigstore.json" ]; then
+if [ -n "${ZONE_COSIGN_PUB:-}" ]; then
+  cp "${ZONE_COSIGN_PUB}" "${tmp}/cosign.pub"
+else
+  printf '%s\n' "${release_key}" >"${tmp}/cosign.pub"
+fi
+verify="cosign verify-blob --key cosign.pub --bundle SHA256SUMS.cosign.bundle --insecure-ignore-tlog=true SHA256SUMS"
+bad="SHA256SUMS.cosign.bundle is not a good signature of SHA256SUMS by the release key"
+if [ ! -f "${tmp}/SHA256SUMS.cosign.bundle" ]; then
   [ "${ZONE_ALLOW_UNSIGNED:-}" = 1 ] ||
     fail "the release is not signed; set ZONE_ALLOW_UNSIGNED=1 to install it on its SHA-256 alone"
   echo "zone install: this release is UNSIGNED; only its SHA-256 is checked" >&2
 elif command -v cosign >/dev/null 2>&1; then
-  (cd "${tmp}" && ${verify} >/dev/null 2>&1) ||
-    fail "SHA256SUMS.sigstore.json is not a good signature of SHA256SUMS by ${identity}"
-  echo "zone install: signature OK (${identity})" >&2
+  (cd "${tmp}" && ${verify} >/dev/null 2>&1) || fail "${bad}"
+  echo "zone install: signature OK (cosign, release key)" >&2
+elif command -v openssl >/dev/null 2>&1; then
+  # The bundle's signature is ECDSA P-256 over SHA256SUMS itself, which openssl checks too.
+  tr -d '\r\n ' <"${tmp}/SHA256SUMS.cosign.bundle" |
+    sed -n 's/.*"signature":"\([A-Za-z0-9+/=]*\)".*/\1/p' | openssl base64 -d -A >"${tmp}/sig"
+  openssl dgst -sha256 -verify "${tmp}/cosign.pub" -signature "${tmp}/sig" "${tmp}/SHA256SUMS" \
+    >/dev/null 2>&1 || fail "${bad}"
+  echo "zone install: signature OK (openssl, release key)" >&2
 else
-  echo "zone install: cosign is not installed, so the signature was not checked. To check it:" >&2
-  echo "  ${verify}" >&2
+  echo "zone install: neither cosign nor openssl is installed, so the signature was not checked." >&2
+  echo "  To check it, with cosign.pub from https://github.com/${repo}: ${verify}" >&2
 fi
 
 got="$(sha256 "${tmp}/${name}")"

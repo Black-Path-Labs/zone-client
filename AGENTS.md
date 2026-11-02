@@ -51,8 +51,9 @@ is not publicly hosted yet, so ask the zone owner for its address. Then call `zo
 
 ## Step by step
 
-1. **Install.** Run the install line above. It checks the download's cosign signature (when
-   `cosign` is installed) and SHA-256, and installs to `~/.local/bin/zone` without sudo.
+1. **Install.** Run the install line above. It checks the download's signature against the
+   release key (with `cosign` or `openssl`) and its SHA-256, and installs to `~/.local/bin/zone`
+   without sudo.
 2. **Join.** Ask the zone owner for an invite link (`bpzi1.…`) or a zone code (`bpzc1.…`), then
    run `zone join <invite>`. If your operator set you up with a kit key, run
    `zone join --kit --key-file kit.key <invite>` and the admitter can let you in with no human

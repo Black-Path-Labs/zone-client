@@ -1,7 +1,8 @@
 //! install.sh under dash against a release served from a directory. PATH carries a curl
 //! and a gh that copy from that directory and record what they were asked for. A changed binary,
-//! a signature by anyone but the release identity and an unsigned release all fail and install
-//! nothing. cosign is a stand-in (tests/common).
+//! a signature by any key but the release key and an unsigned release all fail and install
+//! nothing, whether cosign or openssl checks the signature. cosign is a stand-in and the release
+//! key a test key (tests/common), which ZONE_COSIGN_PUB puts in place of the embedded one.
 #![cfg(unix)]
 
 mod common;
@@ -22,6 +23,7 @@ fn executable(path: &Path, body: &str) {
 
 struct Release {
     _tmp: tempfile::TempDir,
+    key: common::Key,
     home: PathBuf,
     bin: PathBuf,
     release: PathBuf,
@@ -80,8 +82,10 @@ fn release() -> Release {
             rel = release.display()
         ),
     );
+    let key = common::key(tmp.path(), "release");
     Release {
         _tmp: tmp,
+        key,
         home,
         bin,
         release,
@@ -97,7 +101,8 @@ impl Release {
         cmd.arg(repo_root().join("install.sh"))
             .env_clear()
             .env("HOME", &self.home)
-            .env("PATH", path);
+            .env("PATH", path)
+            .env("ZONE_COSIGN_PUB", &self.key.public);
         for (k, v) in env {
             cmd.env(k, v);
         }
@@ -112,20 +117,19 @@ impl Release {
         fs::read_to_string(&self.log).unwrap_or_default()
     }
 
-    /// Signs SHA256SUMS as `email` and puts the stand-in cosign on install.sh's PATH.
-    fn sign(&self, email: &str) {
+    /// Signs SHA256SUMS with `key` and puts the stand-in cosign on install.sh's PATH.
+    fn sign(&self, key: &common::Key) {
         fs::remove_file(self.release.join("UNSIGNED")).unwrap();
         fs::write(
-            self.release.join("SHA256SUMS.sigstore.json"),
-            common::bundle(email, &self.release.join("SHA256SUMS")),
+            self.release.join("SHA256SUMS.cosign.bundle"),
+            common::bundle(&self.bin, key, &self.release.join("SHA256SUMS")),
         )
         .unwrap();
-        common::cosign(&self.bin);
     }
 
     fn signed() -> Release {
         let r = release();
-        r.sign(common::IDENTITY);
+        r.sign(&r.key);
         r
     }
 }
@@ -149,7 +153,7 @@ fn installs_latest_into_local_bin() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("Next: zone join <invite>"), "{stdout}");
     assert!(
-        stderr(&out).contains("signature OK (admin@blackpathlabs.com)"),
+        stderr(&out).contains("signature OK (cosign, release key)"),
         "{}",
         stderr(&out)
     );
@@ -172,7 +176,7 @@ fn installs_latest_into_local_bin() {
         "{log}"
     );
     assert!(
-        log.contains("releases/latest/download/SHA256SUMS.sigstore.json\n"),
+        log.contains("releases/latest/download/SHA256SUMS.cosign.bundle\n"),
         "{log}"
     );
     assert!(
@@ -234,35 +238,95 @@ fn modified_binary_installs_nothing() {
 }
 
 #[test]
-fn a_signature_by_anyone_else_installs_nothing() {
-    let r = release();
-    r.sign("someone@example.com");
-    let out = r.install(&[]);
-    assert!(!out.status.success());
-    assert!(
-        stderr(&out).contains("not a good signature of SHA256SUMS by admin@blackpathlabs.com"),
-        "{}",
-        stderr(&out)
-    );
-    assert!(!r.installed().exists());
+fn a_signature_by_another_key_installs_nothing() {
+    for checker in ["cosign", "openssl"] {
+        let r = release();
+        let other = common::key(&r.bin, "other");
+        r.sign(&other);
+        if checker == "openssl" {
+            fs::remove_file(r.bin.join("cosign")).unwrap();
+        }
+        let out = r.install(&[]);
+        assert!(!out.status.success());
+        assert!(
+            stderr(&out).contains("not a good signature of SHA256SUMS by the release key"),
+            "{checker}: {}",
+            stderr(&out)
+        );
+        assert!(!r.installed().exists());
 
-    // A good signature over other sums.
-    let r = Release::signed();
-    fs::write(r.release.join("SHA256SUMS"), "0".repeat(64) + "  other\n").unwrap();
-    assert!(!r.install(&[]).status.success());
-    assert!(!r.installed().exists());
+        // A good signature over other sums.
+        let r = Release::signed();
+        if checker == "openssl" {
+            fs::remove_file(r.bin.join("cosign")).unwrap();
+        }
+        fs::write(r.release.join("SHA256SUMS"), "0".repeat(64) + "  other\n").unwrap();
+        assert!(!r.install(&[]).status.success());
+        assert!(!r.installed().exists());
+    }
 }
 
 #[test]
-fn without_cosign_prints_how_to_check() {
+fn without_cosign_openssl_checks_the_signature() {
     let r = Release::signed();
     fs::remove_file(r.bin.join("cosign")).unwrap();
     let out = r.install(&[]);
     assert!(out.status.success(), "{}", stderr(&out));
     assert!(
+        stderr(&out).contains("signature OK (openssl, release key)"),
+        "{}",
+        stderr(&out)
+    );
+    assert!(r.installed().is_file());
+}
+
+#[test]
+fn with_neither_cosign_nor_openssl_prints_how_to_check() {
+    let r = Release::signed();
+    fs::remove_file(r.bin.join("cosign")).unwrap();
+    // Only the tools install.sh needs, without openssl.
+    let tools = r.home.join("tools");
+    fs::create_dir(&tools).unwrap();
+    for t in [
+        "uname",
+        "mktemp",
+        "rm",
+        "sed",
+        "head",
+        "cut",
+        "sha256sum",
+        "cp",
+        "chmod",
+        "mkdir",
+        "mv",
+        "tr",
+        "cat",
+        "dash",
+    ] {
+        let found = ["/usr/bin", "/bin"]
+            .iter()
+            .map(|d| Path::new(d).join(t))
+            .find(|p| p.exists())
+            .unwrap_or_else(|| panic!("no {t}"));
+        std::os::unix::fs::symlink(found, tools.join(t)).unwrap();
+    }
+    for t in ["curl", "gh"] {
+        std::os::unix::fs::symlink(r.bin.join(t), tools.join(t)).unwrap();
+    }
+    let out = Command::new("dash")
+        .arg(repo_root().join("install.sh"))
+        .env_clear()
+        .env("HOME", &r.home)
+        .env("PATH", &tools)
+        .env("ZONE_COSIGN_PUB", &r.key.public)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(
         stderr(&out).contains(
-            "cosign verify-blob --bundle SHA256SUMS.sigstore.json --certificate-identity \
-             admin@blackpathlabs.com --certificate-oidc-issuer https://accounts.google.com SHA256SUMS"
+            "with cosign.pub from https://github.com/Black-Path-Labs/zone-client: cosign \
+             verify-blob --key cosign.pub --bundle SHA256SUMS.cosign.bundle \
+             --insecure-ignore-tlog=true SHA256SUMS"
         ),
         "{}",
         stderr(&out)
