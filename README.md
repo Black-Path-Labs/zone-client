@@ -1,7 +1,10 @@
 # zone-client
 
-The `zone` command-line client for Black Path Zones, written in Rust on top of the
-[zone-sdk](https://github.com/Black-Path-Labs/zone-sdk) crates.
+`zone` is the command-line client for Black Path Zones. It joins a zone from an invite link or a
+zone code, waits until the zone admits the device, keeps the zone synced and checks the zone's
+signed receipts offline. It is written in Rust on top of the
+[zone-sdk](https://github.com/Black-Path-Labs/zone-sdk) crates: every Zone and Core operation is
+an SDK call, and this repository holds only the client.
 
 This repository is private until release.
 
@@ -53,6 +56,111 @@ To check a whole `dist` directory, `scripts/verify.sh -P <public key> dist` (or
 when `ZONE_SIGN_KEY` names a minisign secret key. `scripts/release-tools.sh <dir>` fetches the
 pinned minisign 0.12 and prints the `ZONE_MINISIGN` line both scripts read.
 
+## Join a zone
+
+```sh
+zone join <invite>
+```
+
+`<invite>` is an invite link (`bpzi1.…`, or the web app's whole `…#join=bpzi1.…` link) or a zone
+code (`bpzc1.…`). `zone join` makes this device's keys on first use, joins, then syncs until the
+zone admits the device and prints `joined <zone> as <pseudonym>`.
+
+- With an invite link, the zone owner's device admits this one on its next sync.
+- With a zone code, `zone join` prints a join code; give it to the zone's owner, who adds it with
+  Add a device.
+- With `--kit --key-file FILE`, the device also asks the zone's admitter to admit it, in a request
+  signed with the kit key, so admission needs no human step. The kit key is 32 bytes or 64 hex
+  digits in a file of mode 0600, or on stdin with `--key-file -`. It is never read from the
+  command line or the environment.
+
+`--no-wait` returns once joined (and, with `--kit`, asked). `--timeout SECS` stops waiting after
+SECS and exits 4. Running `zone join` again with the same invite resumes the wait. While it waits,
+a "not yet" answer backs off from 10 seconds to at most five minutes; a network failure, a 5xx or
+a 429 is retried after 10 seconds.
+
+`--state DIR` puts the device's state somewhere other than `$XDG_DATA_HOME/zone` (else
+`~/.local/share/zone`, or `%LOCALAPPDATA%\zone` on Windows). It works with every subcommand.
+
+## Status
+
+```sh
+zone status
+```
+
+prints one JSON object from local state, without reaching Core:
+
+```json
+{"zoneId":"…","pseudonym":"…","state":"admitted","members":3,"lastSyncMs":1761999999000,"nextSyncMs":null,"lastFailure":null}
+```
+
+`state` is `admitted`, `pending` or `not-joined`. Times are milliseconds since the epoch, null
+when unknown. `lastFailure` is the reason code of the last failed sync (see Troubleshooting),
+never Core's text.
+
+`zone whoami` prints the state dir, the zone, this device's fingerprint and its pseudonym, and
+with `--key-file` the kit key's fingerprint. It never prints key material.
+
+## Run
+
+```sh
+zone run
+```
+
+keeps the joined zone synced until SIGINT or SIGTERM (Ctrl+C on Windows). After each good sync it
+long-polls Core for news; after a failure it backs off as `zone join` does and prints
+`zone run: sync failed (<reason code>); retrying in <n>s`. A signal stops it between syncs: a sync
+in progress finishes and is recorded, and `zone run` exits 0. A second signal exits at once.
+`--rounds N` stops after N syncs.
+
+## Receipts
+
+```sh
+zone receipts verify
+```
+
+checks the zone's signed action receipts and each actor's chain offline, through the SDK. It
+prints `ok <actor> seq <first>..=<last> (<n> receipts)` per chain and
+`verified <n> receipts in <m> chains`. A receipt that is bad, dropped, repeated or out of order is
+named on stderr with its actor and seq, and the exit code is 5. A chain is checked from the first
+receipt this device holds for its actor: receipts sealed before it joined never reached it.
+
+`--file FILE` checks the receipts in FILE (`{workspace_id, devices, receipts}`) instead of the
+joined zone's. The devices in the file are trusted as given.
+
+## Troubleshooting
+
+`zone join` and `zone run` name a failure by a reason code, never by Core's text. `zone status`
+shows the last one as `lastFailure`.
+
+| Reason code    | Meaning                                                     | What to do                                                                |
+| -------------- | ----------------------------------------------------------- | ------------------------------------------------------------------------- |
+| `not-admitted` | Joined, but not on the zone's roster yet                    | Wait; the owner or the zone's admitter has not admitted the device        |
+| `core-404`     | Core does not know the request yet, or the invite is spent  | While waiting, wait. From the first join: ask the owner for a new invite  |
+| `core-0`       | Core was not reached                                        | Check the network; retried while waiting, run the first `zone join` again |
+| `core-429`     | Core is rate limiting                                       | Nothing; retried after 10 s while waiting                                 |
+| `core-5xx`     | Core failed (`core-500`, `core-503`, …)                     | Nothing; retried after 10 s while waiting                                 |
+| `core-<other>` | Core refused with that HTTP status (`core-401`, `core-403`) | The invite or kit key is not accepted: ask the owner for a new one        |
+| `bad-code`     | The invite or zone code does not decode                     | Copy the whole invite again                                               |
+| `no-zone`      | No zone is joined in this state dir                         | Run `zone join` first, or pass the right `--state DIR`                    |
+| `not-admin`    | The step needs a zone admin                                 | Ask the zone's owner                                                      |
+| `not-found`    | The item asked for does not exist in the zone               | Check what was asked for                                                  |
+| `too-large`    | An item is over the SDK's size limit                        | Use a smaller item                                                        |
+| `vault`        | `vault.key` is missing, the wrong size or open to others    | `chmod 600` it; a lost key means joining again with a new device          |
+| `store`        | The encrypted store in the state dir cannot be read         | Check the disk and the state dir's owner                                  |
+| `crypto`       | A signature or envelope did not verify                      | Report it (`SECURITY.md`) with the command and the reason code            |
+
+Exit codes: 0 success, 1 an error (the message names it), 2 a usage error, 3 `zone join` refused
+(stderr prints `refused (<reason code>)`), 4 `zone join --timeout` passed before admission, 5
+`zone receipts verify` found a bad receipt or chain.
+
+Other messages:
+
+- `key file … is open to others (mode 644); chmod 600 it`: the kit key file is readable by
+  others. Fix the mode; the client never narrows it for you.
+- A state dir or a file in it that others can read is refused for the same reason.
+- `not a zone code or invite link`: the argument is neither `bpzi1.…` nor `bpzc1.…`.
+
 ## Cut a release
 
 Releases are cut on a maintainer's machine; no CI runs here. From a clean checkout whose HEAD is
@@ -71,3 +179,9 @@ a draft GitHub release. It refuses a dirty tree or a tag or release that exists.
 `scripts/repro.sh x86_64-unknown-linux-musl` builds a target twice from nothing and fails unless
 both binaries have the same SHA-256. `scripts/build.sh` maps build-machine paths away, so the
 binary names no home directory.
+
+## Security and contributing
+
+`SECURITY.md` lists the key files, what never leaves the device and how to report a
+vulnerability. `CONTRIBUTING.md` explains how changes land: no CI runs pull requests here, and
+maintainers cut releases.
