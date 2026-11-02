@@ -6,7 +6,7 @@ members = ["crates/zone"]
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.99"
-license = "Apache-2.0 OR MIT"
+license = "MIT"
 repository = "https://github.com/Black-Path-Labs/zone-client"
 publish = false
 

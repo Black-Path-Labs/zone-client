@@ -36,4 +36,4 @@ it with a recorded approval.
 
 ## Licence
 
-Contributions are licensed as the repository is: Apache-2.0 OR MIT, at your option.
+Contributions are licensed as the repository is: MIT.
