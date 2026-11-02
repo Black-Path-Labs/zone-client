@@ -1,8 +1,10 @@
-//! Scripts/macos-sign.sh with stand-in uname, codesign, ditto, xcrun and gh on PATH, so
+//! scripts/macos-sign.sh with stand-in uname, codesign, ditto, xcrun and gh on PATH, so
 //! it runs off a Mac. The stand-in codesign appends to the binary, as a real signature changes its
 //! bytes, so the tests see SHA256SUMS rewritten over the signed binaries. Real signing and
 //! notarization run on a Mac with the Developer ID certificate.
 #![cfg(unix)]
+
+mod common;
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -85,7 +87,8 @@ fn run(mac: &Mac, args: &[&str], env: &[(&str, &str)]) -> Output {
         .env("PATH", path)
         .env("ZONE_MACOS_IDENTITY", IDENTITY)
         .env("ZONE_NOTARY_PROFILE", "zone-notary")
-        .env_remove("ZONE_SIGN_KEY")
+        .env("ZONE_UNSIGNED", "1")
+        .env_remove("ZONE_IDENTITY_TOKEN")
         .env_remove("NOTARY")
         .env_remove("GH_DRAFT")
         .env_remove("FAKE_UNAME");
@@ -254,7 +257,7 @@ fn release_mode_replaces_the_draft_assets() {
 }
 
 #[test]
-fn release_mode_refuses_a_published_release_or_losing_a_signature() {
+fn release_mode_refuses_a_published_release() {
     let mac = mac();
     let assets = dist(mac.tmp.path());
     let a = assets.to_str().unwrap();
@@ -265,12 +268,42 @@ fn release_mode_refuses_a_published_release_or_losing_a_signature() {
         &run(&mac, &tag, &[("GH_DRAFT", "false"), ("GH_ASSETS", a)]),
         "only a draft is re-signed",
     );
-    fs::write(assets.join("SHA256SUMS.minisig"), "sig").unwrap();
-    refused(
-        &run(&mac, &tag, &[("GH_DRAFT", "true"), ("GH_ASSETS", a)]),
-        "set ZONE_SIGN_KEY",
-    );
     let log = log(&mac);
     assert!(!log.contains("codesign"), "{log}");
     assert!(!log.contains("upload"), "{log}");
+}
+
+#[test]
+fn release_mode_keeps_signed_sums_signed() {
+    let mac = mac();
+    let assets = dist(mac.tmp.path());
+    fs::write(assets.join("SHA256SUMS"), "stale").unwrap();
+    fs::write(assets.join("SHA256SUMS.sigstore.json"), "stale").unwrap();
+    let a = assets.to_str().unwrap();
+    let cosign = common::cosign(&mac.bin);
+    let token = common::token(mac.tmp.path(), common::IDENTITY, true, "google");
+
+    let out = run(
+        &mac,
+        &["--release", "v0.1.0-rc.4"],
+        &[
+            ("GH_DRAFT", "true"),
+            ("GH_ASSETS", a),
+            ("ZONE_UNSIGNED", "1"),
+            ("ZONE_COSIGN", cosign.to_str().unwrap()),
+            ("ZONE_IDENTITY_TOKEN", token.to_str().unwrap()),
+        ],
+    );
+    ok(&out);
+    let log = log(&mac);
+    let upload = log
+        .lines()
+        .find(|l| l.starts_with("gh release upload v0.1.0-rc.4 --clobber "))
+        .unwrap_or_else(|| panic!("{log}"));
+    assert!(upload.ends_with("/SHA256SUMS.sigstore.json"), "{upload}");
+    assert!(
+        log.contains("gh release delete-asset v0.1.0-rc.4 UNSIGNED"),
+        "{log}"
+    );
+    assert!(common::cosign_log(&mac.bin).contains("cosign sign-blob"));
 }

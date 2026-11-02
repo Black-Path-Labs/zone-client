@@ -1,8 +1,10 @@
-//! Install.sh under dash against a release served from a directory. PATH carries a curl
+//! install.sh under dash against a release served from a directory. PATH carries a curl
 //! and a gh that copy from that directory and record what they were asked for. A changed binary,
-//! a bad signature and an unsigned release once a key is set all fail and install nothing.
-//! minisign is ZONE_MINISIGN or minisign on PATH (scripts/release-tools.sh).
+//! a signature by anyone but the release identity and an unsigned release all fail and install
+//! nothing. cosign is a stand-in (tests/common).
 #![cfg(unix)]
+
+mod common;
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -11,16 +13,6 @@ use std::process::{Command, Output};
 
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
-}
-
-fn minisign() -> String {
-    let bin = std::env::var("ZONE_MINISIGN").unwrap_or_else(|_| "minisign".into());
-    let found = Command::new(&bin).arg("-v").output();
-    assert!(
-        found.is_ok_and(|o| o.status.success()),
-        "no minisign at {bin:?}: run eval \"$(scripts/release-tools.sh <dir>)\""
-    );
-    bin
 }
 
 fn executable(path: &Path, body: &str) {
@@ -55,7 +47,7 @@ fn release() -> Release {
     }
     let out = Command::new(repo_root().join("scripts/sign.sh"))
         .arg(&release)
-        .env_remove("ZONE_SIGN_KEY")
+        .env("ZONE_UNSIGNED", "1")
         .output()
         .unwrap();
     assert!(
@@ -99,11 +91,8 @@ fn release() -> Release {
 
 impl Release {
     fn install(&self, env: &[(&str, &str)]) -> Output {
-        let path = format!(
-            "{}:{}",
-            self.bin.display(),
-            std::env::var("PATH").unwrap_or_default()
-        );
+        // Not the host's PATH: a cosign installed there would answer instead of the stand-in.
+        let path = format!("{}:/usr/bin:/bin", self.bin.display());
         let mut cmd = Command::new("dash");
         cmd.arg(repo_root().join("install.sh"))
             .env_clear()
@@ -123,39 +112,21 @@ impl Release {
         fs::read_to_string(&self.log).unwrap_or_default()
     }
 
-    /// Signs SHA256SUMS with a new key, puts minisign on the scripts' PATH, returns the public key.
-    fn sign(&self) -> String {
-        let key = self.release.join("../zone.key");
-        let public = self.release.join("../zone.pub");
-        let out = Command::new(minisign())
-            .args(["-G", "-W", "-p"])
-            .arg(&public)
-            .arg("-s")
-            .arg(&key)
-            .output()
-            .unwrap();
-        assert!(out.status.success());
+    /// Signs SHA256SUMS as `email` and puts the stand-in cosign on install.sh's PATH.
+    fn sign(&self, email: &str) {
         fs::remove_file(self.release.join("UNSIGNED")).unwrap();
-        let out = Command::new(minisign())
-            .args(["-S", "-s"])
-            .arg(&key)
-            .arg("-m")
-            .arg(self.release.join("SHA256SUMS"))
-            .output()
-            .unwrap();
-        assert!(out.status.success());
-        self.with_minisign();
-        let public = fs::read_to_string(&public).unwrap();
-        public.lines().nth(1).unwrap().to_string()
+        fs::write(
+            self.release.join("SHA256SUMS.sigstore.json"),
+            common::bundle(email, &self.release.join("SHA256SUMS")),
+        )
+        .unwrap();
+        common::cosign(&self.bin);
     }
 
-    fn with_minisign(&self) {
-        let path = Command::new("sh")
-            .args(["-c", "command -v \"$1\"", "sh", &minisign()])
-            .output()
-            .unwrap();
-        let path = String::from_utf8(path.stdout).unwrap();
-        std::os::unix::fs::symlink(path.trim(), self.bin.join("minisign")).unwrap();
+    fn signed() -> Release {
+        let r = release();
+        r.sign(common::IDENTITY);
+        r
     }
 }
 
@@ -172,12 +143,16 @@ fn host_arch() -> &'static str {
 
 #[test]
 fn installs_latest_into_local_bin() {
-    let r = release();
+    let r = Release::signed();
     let out = r.install(&[]);
     assert!(out.status.success(), "{}", stderr(&out));
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("Next: zone join <invite>"), "{stdout}");
-    assert!(stderr(&out).contains("UNSIGNED"), "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("signature OK (admin@blackpathlabs.com)"),
+        "{}",
+        stderr(&out)
+    );
     assert!(stderr(&out).contains("SHA-256 OK"), "{}", stderr(&out));
     assert!(stderr(&out).contains("add "), "{}", stderr(&out));
 
@@ -197,6 +172,10 @@ fn installs_latest_into_local_bin() {
         "{log}"
     );
     assert!(
+        log.contains("releases/latest/download/SHA256SUMS.sigstore.json\n"),
+        "{log}"
+    );
+    assert!(
         log.contains(&format!(
             "releases/latest/download/zone-0.1.0-{}-unknown-linux-musl\n",
             host_arch()
@@ -207,7 +186,7 @@ fn installs_latest_into_local_bin() {
 
 #[test]
 fn pinned_version_and_install_dir() {
-    let r = release();
+    let r = Release::signed();
     let dir = r.home.join("tools");
     let out = r.install(&[
         ("ZONE_VERSION", "v0.1.0"),
@@ -226,10 +205,11 @@ fn pinned_version_and_install_dir() {
 
 #[test]
 fn gh_download_reaches_a_private_release() {
-    let r = release();
+    let r = Release::signed();
     let out = r.install(&[("ZONE_GH", "1"), ("ZONE_VERSION", "v0.1.0-rc.1")]);
     assert!(out.status.success(), "{}", stderr(&out));
     assert!(r.installed().is_file());
+    assert!(stderr(&out).contains("signature OK"), "{}", stderr(&out));
     let log = r.log();
     assert!(
         log.starts_with("gh release download v0.1.0-rc.1 -R Black-Path-Labs/zone-client -D "),
@@ -240,7 +220,7 @@ fn gh_download_reaches_a_private_release() {
 
 #[test]
 fn modified_binary_installs_nothing() {
-    let r = release();
+    let r = Release::signed();
     let name = format!("zone-0.1.0-{}-unknown-linux-musl", host_arch());
     fs::write(r.release.join(name), "#!/bin/sh\necho swapped\n").unwrap();
     let out = r.install(&[]);
@@ -254,46 +234,45 @@ fn modified_binary_installs_nothing() {
 }
 
 #[test]
-fn signed_release_checks_the_signature() {
+fn a_signature_by_anyone_else_installs_nothing() {
     let r = release();
-    let public = r.sign();
-    let out = r.install(&[("ZONE_PUBKEY", &public)]);
-    assert!(out.status.success(), "{}", stderr(&out));
-    assert!(stderr(&out).contains("signature OK"), "{}", stderr(&out));
-
-    // A signature that does not cover these sums.
-    let r = release();
-    r.sign();
-    let other = release().sign();
-    let out = r.install(&[("ZONE_PUBKEY", &other)]);
+    r.sign("someone@example.com");
+    let out = r.install(&[]);
     assert!(!out.status.success());
     assert!(
-        stderr(&out).contains("not a good signature"),
+        stderr(&out).contains("not a good signature of SHA256SUMS by admin@blackpathlabs.com"),
         "{}",
         stderr(&out)
     );
     assert!(!r.installed().exists());
+
+    // A good signature over other sums.
+    let r = Release::signed();
+    fs::write(r.release.join("SHA256SUMS"), "0".repeat(64) + "  other\n").unwrap();
+    assert!(!r.install(&[]).status.success());
+    assert!(!r.installed().exists());
 }
 
 #[test]
-fn without_minisign_prints_how_to_check() {
-    let r = release();
-    let public = r.sign();
-    fs::remove_file(r.bin.join("minisign")).unwrap();
-    let out = r.install(&[("ZONE_PUBKEY", &public)]);
+fn without_cosign_prints_how_to_check() {
+    let r = Release::signed();
+    fs::remove_file(r.bin.join("cosign")).unwrap();
+    let out = r.install(&[]);
     assert!(out.status.success(), "{}", stderr(&out));
     assert!(
-        stderr(&out).contains(&format!("minisign -Vm SHA256SUMS -P {public}")),
+        stderr(&out).contains(
+            "cosign verify-blob --bundle SHA256SUMS.sigstore.json --certificate-identity \
+             admin@blackpathlabs.com --certificate-oidc-issuer https://accounts.google.com SHA256SUMS"
+        ),
         "{}",
         stderr(&out)
     );
 }
 
 #[test]
-fn unsigned_release_is_refused_once_a_key_is_set() {
+fn an_unsigned_release_is_refused_unless_allowed() {
     let r = release();
-    let public = release().sign();
-    let out = r.install(&[("ZONE_PUBKEY", &public)]);
+    let out = r.install(&[]);
     assert!(!out.status.success());
     assert!(
         stderr(&out).contains("ZONE_ALLOW_UNSIGNED=1"),
@@ -302,8 +281,9 @@ fn unsigned_release_is_refused_once_a_key_is_set() {
     );
     assert!(!r.installed().exists());
 
-    let out = r.install(&[("ZONE_PUBKEY", &public), ("ZONE_ALLOW_UNSIGNED", "1")]);
+    let out = r.install(&[("ZONE_ALLOW_UNSIGNED", "1")]);
     assert!(out.status.success(), "{}", stderr(&out));
+    assert!(stderr(&out).contains("UNSIGNED"), "{}", stderr(&out));
 }
 
 #[test]

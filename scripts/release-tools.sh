@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Fetches the pinned minisign that scripts/sign.sh and scripts/verify.sh use into a directory and
+# Fetches the pinned cosign that scripts/sign.sh and scripts/verify.sh use into a directory and
 # checks the download against the SHA-256 recorded here. An already fetched file is re-checked,
 # not re-downloaded. Prints the env line those scripts read.
 #
@@ -11,40 +11,38 @@ if [ -z "${dir}" ]; then
   echo "usage: scripts/release-tools.sh <dir>" >&2
   exit 2
 fi
+
+# The upstream release's cosign_checksums.txt, which Sigstore signs with cosign itself.
+cosign_version=3.1.4
 case "$(uname -sm)" in
-  "Linux x86_64") arch=x86_64 ;;
-  "Linux aarch64") arch=aarch64 ;;
+  "Linux x86_64")
+    arch=amd64
+    cosign_sha=424e2c97d0b45fd7a6b608a87f090f35633f4c23ece5f092d48bba11aaf4bbfa
+    ;;
+  "Linux aarch64")
+    arch=arm64
+    cosign_sha=ade83b7aac62e131cacfe96d958948b2150cc9efec46a570a2649b8e27dedad2
+    ;;
   *)
     echo "release-tools: pins exist for Linux x86_64 and aarch64 hosts only" >&2
     exit 1
     ;;
 esac
+cosign_bin="cosign-linux-${arch}"
+cosign_url="https://github.com/sigstore/cosign/releases/download/v${cosign_version}/${cosign_bin}"
 
-# The upstream release, which also verifies under its author's published minisign key
-# RWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1CBM0QTaLn73Y7GFO3.
-minisign_version=0.12
-minisign_tar="minisign-${minisign_version}-linux.tar.gz"
-minisign_url="https://github.com/jedisct1/minisign/releases/download/${minisign_version}/${minisign_tar}"
-minisign_sha=9a599b48ba6eb7b1e80f12f36b94ceca7c00b7a5173c95c3efc88d9822957e73
-
-mkdir -p "${dir}/dl"
+mkdir -p "${dir}/cosign-${cosign_version}"
 dir="$(cd "${dir}" && pwd)"
+bin="${dir}/cosign-${cosign_version}/${cosign_bin}"
 
-if [ ! -f "${dir}/dl/${minisign_tar}" ]; then
-  curl -fsSL -o "${dir}/dl/${minisign_tar}.part" "${minisign_url}"
-  mv "${dir}/dl/${minisign_tar}.part" "${dir}/dl/${minisign_tar}"
+if [ ! -f "${bin}" ]; then
+  curl -fsSL -o "${bin}.part" "${cosign_url}"
+  mv "${bin}.part" "${bin}"
 fi
-if ! echo "${minisign_sha}  ${dir}/dl/${minisign_tar}" | sha256sum -c --quiet; then
-  echo "release-tools: ${minisign_tar} does not match its pinned SHA-256" >&2
+if ! echo "${cosign_sha}  ${bin}" | sha256sum -c --quiet; then
+  echo "release-tools: ${cosign_bin} does not match its pinned SHA-256" >&2
   exit 1
 fi
+chmod 0755 "${bin}"
 
-minisign_dir="${dir}/minisign-${minisign_version}"
-bin="${minisign_dir}/minisign-linux/${arch}/minisign"
-if [ ! -x "${bin}" ]; then
-  mkdir -p "${minisign_dir}"
-  # The archive carries macOS xattr headers that GNU tar warns about and skips.
-  tar -C "${minisign_dir}" -xzf "${dir}/dl/${minisign_tar}" --warning=no-unknown-keyword
-fi
-
-echo "export ZONE_MINISIGN=\"${bin}\""
+echo "export ZONE_COSIGN=\"${bin}\""

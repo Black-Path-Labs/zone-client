@@ -1,4 +1,4 @@
-//! Scripts/release.sh refuses before it builds or calls gh. Each case runs a copy of the
+//! scripts/release.sh refuses before it builds or calls gh. Each case runs a copy of the
 //! script in a throwaway git repository whose PATH carries a gh that only records being called.
 #![cfg(unix)]
 
