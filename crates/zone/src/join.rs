@@ -7,6 +7,10 @@
 //! `MAX_REQUEST_AGE_MS`; while waiting, a new one goes out when the last has expired, and after
 //! a failed send (no grant in force yet: 404) the waiting backoff decides when.
 //!
+//! A join address (`za_…`) stands for a zone code its owner published: the SDK resolves it at
+//! `--core` and refuses a code that does not hash to the address, then the join goes on as for
+//! that zone code. With `--kit` that is the whole self-service join: no invite and no owner step.
+//!
 //! Every step is an SDK call. Running `zone join` again with the same code resumes the wait.
 //! Each sync is noted for `zone status` (record.rs).
 
@@ -15,7 +19,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use bp_workspace_core::agent_join::MAX_REQUEST_AGE_MS;
-use bp_workspace_core::space::{InviteLink, ZoneCode, ZONE_CODE_PREFIX};
+use bp_workspace_core::space::{is_join_address, InviteLink, ZoneCode, ZONE_CODE_PREFIX};
 use bp_zone_core::{ZoneDevice, ZoneError};
 use rand_core::{OsRng, RngCore};
 
@@ -40,6 +44,8 @@ pub enum Outcome {
 
 pub struct Options<'a> {
     pub code: &'a str,
+    /// The Core a join address is resolved at.
+    pub core: &'a str,
     pub kit: Option<&'a KitKey>,
     pub wait: bool,
     pub timeout: Option<Duration>,
@@ -88,7 +94,21 @@ fn bare_code(input: &str) -> &str {
 }
 
 pub fn run(state: &Path, opts: Options<'_>) -> Result<Outcome, String> {
-    let code = bare_code(opts.code);
+    let mut code = bare_code(opts.code);
+    let resolved;
+    if is_join_address(code) {
+        // Before any state: an address nobody publishes leaves nothing behind.
+        match bp_zone_core::resolve_join_address(
+            opts.core.to_owned(),
+            code.to_owned(),
+            Arc::new(Http::default()),
+        ) {
+            Ok(c) => resolved = c,
+            Err(e) if transient(&kind(&e)) => return Err(e.to_string()),
+            Err(e) => return Ok(refused(&e)),
+        }
+        code = &resolved;
+    }
     let in_person = code.starts_with(ZONE_CODE_PREFIX);
     let zone = if in_person {
         ZoneCode::decode(code)
@@ -224,5 +244,6 @@ mod tests {
             "bpzi1.abc"
         );
         assert_eq!(bare_code("bpzc1.xyz"), "bpzc1.xyz");
+        assert_eq!(bare_code(" za_abcdefghijklmnop\n"), "za_abcdefghijklmnop");
     }
 }

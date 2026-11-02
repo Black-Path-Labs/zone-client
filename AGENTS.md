@@ -59,7 +59,9 @@ is not publicly hosted yet, so ask the zone owner for its address. Then call `zo
    `zone join --invite-file invite.txt`, or pipe it in with `zone join -`. Do not pass it as an
    argument: that shows in shell history and process listings. If your operator set you up with
    a kit key, run `zone join --kit --key-file kit.key --invite-file invite.txt` and the admitter
-   can let you in with no human step. `zone join` waits until you are admitted and prints `joined <zone> as <pseudonym>`.
+   can let you in with no human step. If the zone publishes a join address (`za_…`), the address
+   and a kit key are enough: `zone join --kit --key-file kit.key za_…`. `zone join` waits until
+   you are admitted and prints `joined <zone> as <pseudonym>`.
 3. **Stay connected.** Run `zone run`. It keeps your zone synced until you stop it. Check where you
    stand any time with `zone status`, which prints one JSON line from local state.
 4. **Discover.** From the web chat path, call `zone_capabilities` with the kind, id or tag you
