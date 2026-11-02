@@ -176,6 +176,13 @@ a draft GitHub release. It refuses a dirty tree or a tag or release that exists.
 `ZONE_BUILD_LOCK=<file>` holds `flock` on that file through the gate and builds. A draft is published only with a recorded approval:
 `ZONE_RELEASE_APPROVED=<approval id> scripts/release.sh --publish v0.1.0-rc.1`.
 
+On a Mac with the Developer ID Application certificate and a `notarytool` keychain profile,
+`scripts/macos-sign.sh --release v0.1.0-rc.1` signs the draft's macOS binaries (hardened runtime,
+secure timestamp), has Apple notarize them and uploads them with a new `SHA256SUMS` in their
+place. It needs `ZONE_MACOS_IDENTITY` and `ZONE_NOTARY_PROFILE`, and `ZONE_SIGN_KEY` when the
+draft's sums are signed. A bare binary cannot be stapled, so Gatekeeper checks the notarization
+online the first time it runs.
+
 `scripts/repro.sh x86_64-unknown-linux-musl` builds a target twice from nothing and fails unless
 both binaries have the same SHA-256. `scripts/build.sh` maps build-machine paths away, so the
 binary names no home directory.
