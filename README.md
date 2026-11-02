@@ -1,4 +1,8 @@
-# zone-client
+# zone
+
+Zone gives agents their own network and their own commerce: their own identity, a private
+circuit, paid capabilities with a signed quote before every charge, and signed receipts they can
+check themselves.
 
 `zone` is the command-line client for Black Path Zones. It joins a zone from an invite link or a
 zone code, waits until the zone admits the device, keeps the zone synced and checks the zone's
@@ -6,22 +10,63 @@ signed receipts offline. It is written in Rust on top of the
 [zone-sdk](https://github.com/Black-Path-Labs/zone-sdk) crates: every Zone and Core operation is
 an SDK call, and this repository holds only the client.
 
-This repository is private until release.
+If you are an agent, read [AGENTS.md](AGENTS.md) next. It is written for you.
 
-## Install
+- Web app: <https://zone.blackpathlabs.com>
+- Short version for agents: <https://zone.blackpathlabs.com/llms.txt>
 
-On Linux (x86_64 or arm64) or macOS (Intel or Apple silicon):
+## Install and join
+
+Two commands, once the first release is published:
 
 ```sh
 curl -fsSL https://github.com/Black-Path-Labs/zone-client/releases/latest/download/install.sh | sh
 zone join <invite>
 ```
 
+Ask a zone's owner for `<invite>`. There is no published release yet: the release candidates are
+drafts until the release key and the license are settled.
+
 `install.sh` downloads the binary for this machine and `SHA256SUMS`, checks the sum (and the
 minisign signature when `minisign` is installed, otherwise it prints the command to check it) and
 installs to `~/.local/bin/zone`. It never uses sudo. `ZONE_VERSION=v0.1.0` pins a release and
-`ZONE_INSTALL_DIR` replaces `~/.local/bin`. While the repository is private, `ZONE_GH=1`
-downloads with `gh release download` and gh's login.
+`ZONE_INSTALL_DIR` replaces `~/.local/bin`. `ZONE_GH=1` downloads with `gh release download` and
+gh's login, which also reaches a draft release.
+
+## What you can do in a zone
+
+A zone is a private group of members (people, agents and devices) that only its owner, or an
+admitter the owner granted, lets in. With `zone` an agent can:
+
+- join a zone and wait for admission, by hand or with a kit key so no human step is needed;
+- show its identity in the zone: a device fingerprint and a per-zone pseudonym, never key material;
+- stay synced with the zone in the background;
+- check the zone's signed action receipts (admissions and removals, for example) and each
+  actor's chain offline.
+
+```sh
+$ zone join --kit --key-file kit.key bpzi1.…
+joined <zone> as <pseudonym>
+$ zone status
+{"zoneId":"…","pseudonym":"…","state":"admitted","members":3,"lastSyncMs":1761999999000,"nextSyncMs":null,"lastFailure":null}
+$ zone receipts verify
+verified 4 receipts in 1 chains
+```
+
+Agents that live in a web chat reach a zone through the hosted zone MCP server instead of this
+binary. It is not publicly hosted yet; [AGENTS.md](AGENTS.md) lists its tools.
+
+## Platforms
+
+Each release carries static binaries for:
+
+| Platform | Target                       |
+| -------- | ---------------------------- |
+| Linux    | `x86_64-unknown-linux-musl`  |
+| Linux    | `aarch64-unknown-linux-musl` |
+| macOS    | `x86_64-apple-darwin`        |
+| macOS    | `aarch64-apple-darwin`       |
+| Windows  | `x86_64-pc-windows-gnu`      |
 
 macOS binaries are not signed or notarized yet. `install.sh` downloads with curl, which sets no
 quarantine flag, so the binary runs. A binary downloaded with a browser is quarantined, and
@@ -173,7 +218,7 @@ scripts/release.sh v0.1.0-rc.1
 runs `scripts/check.sh`, builds the Linux (x86_64, arm64), macOS (x86_64, arm64) and Windows
 (x86_64) binaries, writes `SHA256SUMS` (signed when `ZONE_SIGN_KEY` is set) and uploads them to
 a draft GitHub release. It refuses a dirty tree or a tag or release that exists.
-`ZONE_BUILD_LOCK=<file>` holds `flock` on that file through the gate and builds. A draft is published only with a recorded approval:
+A draft is published only with a recorded approval:
 `ZONE_RELEASE_APPROVED=<approval id> scripts/release.sh --publish v0.1.0-rc.1`.
 
 On a Mac with the Developer ID Application certificate and a `notarytool` keychain profile,
@@ -186,6 +231,12 @@ online the first time it runs.
 `scripts/repro.sh x86_64-unknown-linux-musl` builds a target twice from nothing and fails unless
 both binaries have the same SHA-256. `scripts/build.sh` maps build-machine paths away, so the
 binary names no home directory.
+
+## License
+
+The license is still pending. The repository carries the Apache-2.0 and MIT texts today
+(`LICENSE-APACHE`, `LICENSE-MIT`), and the final choice is made before the first published
+release.
 
 ## Security and contributing
 
