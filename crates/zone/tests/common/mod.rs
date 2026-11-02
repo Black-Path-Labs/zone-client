@@ -1,6 +1,8 @@
-//! Stand-ins for cosign and a Sigstore identity token, shared by the signing tests. The real
-//! cosign needs Fulcio and Rekor; these check the scripts' wiring: which identity they pin, which
-//! file they sign and that a refused identity never reaches cosign.
+//! A stand-in for cosign and test release keys, shared by the signing tests. The stand-in signs
+//! and verifies with openssl: ECDSA P-256 over the blob itself, as cosign does with a key, with
+//! the signature where a cosign bundle carries it, so install.sh's openssl path reads it too. It
+//! refuses any call that would reach a transparency log and records every call, so the tests see
+//! which key and file the scripts use.
 #![allow(dead_code)]
 
 use std::fs;
@@ -8,80 +10,94 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// The release identity the scripts pin.
-pub const IDENTITY: &str = "admin@blackpathlabs.com";
+/// The passphrase the test keys "need": the stand-in only checks that cosign was given one.
+pub const PASSWORD: &str = "test-passphrase";
 
 pub fn executable(path: &Path, body: &str) {
     fs::write(path, body).unwrap();
     fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
 }
 
-/// base64url without padding, as a JWT carries its parts.
-pub fn b64url(bytes: &[u8]) -> String {
-    const A: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-    let mut out = String::new();
-    for chunk in bytes.chunks(3) {
-        let n = chunk.iter().fold(0u32, |n, b| (n << 8) | u32::from(*b)) << (8 * (3 - chunk.len()));
-        for i in 0..=chunk.len() {
-            out.push(A[((n >> (18 - 6 * i)) & 63) as usize] as char);
-        }
+/// A release key in `dir`: the private key, the public key and a passphrase file.
+pub struct Key {
+    pub private: PathBuf,
+    pub public: PathBuf,
+    pub password_file: PathBuf,
+}
+
+pub fn key(dir: &Path, name: &str) -> Key {
+    let private = dir.join(format!("{name}.key"));
+    let public = dir.join(format!("{name}.pub"));
+    let password_file = dir.join(format!("{name}.password"));
+    let ok = Command::new("openssl")
+        .args([
+            "ecparam",
+            "-name",
+            "prime256v1",
+            "-genkey",
+            "-noout",
+            "-out",
+        ])
+        .arg(&private)
+        .status()
+        .unwrap()
+        .success()
+        && Command::new("openssl")
+            .args(["ec", "-pubout", "-in"])
+            .arg(&private)
+            .arg("-out")
+            .arg(&public)
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap()
+            .success();
+    assert!(ok, "openssl could not make a test key");
+    fs::write(&password_file, PASSWORD).unwrap();
+    Key {
+        private,
+        public,
+        password_file,
     }
-    out
 }
 
-/// A token file whose payload carries these claims. Its signature part is a stand-in: Fulcio
-/// checks it, the scripts only read the claims.
-pub fn token(dir: &Path, email: &str, verified: bool, connector: &str) -> PathBuf {
-    let claims = format!(
-        r#"{{"iss":"https://oauth2.sigstore.dev/auth","email":"{email}","email_verified":{verified},"federated_claims":{{"connector_id":"{connector}"}}}}"#
-    );
-    let path = dir.join(format!("{email}.{connector}.token"));
-    fs::write(
-        &path,
-        format!(
-            "{}.{}.c2ln",
-            b64url(br#"{"alg":"RS256"}"#),
-            b64url(claims.as_bytes())
-        ),
-    )
-    .unwrap();
-    path
-}
-
-/// A stand-in `cosign` in `dir`. `sign-blob` writes a bundle naming the token's email and the
-/// blob's SHA-256; `verify-blob` passes only when the bundle names the pinned identity, the
-/// issuer is Google's and the blob is the one signed. Every call goes to `dir/cosign.log`.
+/// A stand-in `cosign` in `dir`. `sign-blob` needs a key, a passphrase and the log turned off;
+/// `verify-blob` needs a key and the log check turned off. Every call goes to `dir/cosign.log`,
+/// with whether a passphrase was given.
 pub fn cosign(dir: &Path) -> PathBuf {
     let path = dir.join("cosign");
     executable(
         &path,
         &format!(
             r#"#!/bin/sh
-echo "cosign $*" >>'{log}'
+echo "cosign $* (password: ${{COSIGN_PASSWORD:-none}})" >>'{log}'
 cmd="$1"
 shift
-bundle= token= ident= iss= blob=
+key= bundle= blob= tlog=
 while [ $# -gt 0 ]; do
   case "$1" in
+    --key) key="$2"; shift ;;
     --bundle) bundle="$2"; shift ;;
-    --identity-token) token="$2"; shift ;;
-    --certificate-identity) ident="$2"; shift ;;
-    --certificate-oidc-issuer) iss="$2"; shift ;;
-    --yes) ;;
+    --tlog-upload=false | --insecure-ignore-tlog=true) tlog=off ;;
+    --yes | --use-signing-config=false) ;;
+    -*) exit 2 ;;
     *) blob="$1" ;;
   esac
   shift
 done
-sum="$(sha256sum <"$blob" | cut -d' ' -f1)"
+[ "$tlog" = off ] || exit 3
 case "$cmd" in
   sign-blob)
-    p="$(cut -d. -f2 "$token" | tr '_-' '/+')"
-    while [ $((${{#p}} % 4)) -ne 0 ]; do p="$p="; done
-    email="$(printf '%s' "$p" | openssl base64 -d -A | sed -n 's/.*"email":"\([^"]*\)".*/\1/p')"
-    echo "$email $sum" >"$bundle"
+    [ -n "${{COSIGN_PASSWORD:-}}" ] || exit 4
+    sig="$(openssl dgst -sha256 -sign "$key" "$blob" | openssl base64 -A)" || exit 1
+    printf '{{"mediaType":"application/vnd.dev.sigstore.bundle.v0.3+json","messageSignature":{{"signature":"%s"}}}}' "$sig" >"$bundle"
     ;;
   verify-blob)
-    [ "$iss" = https://accounts.google.com ] && [ "$(cat "$bundle")" = "$ident $sum" ]
+    der="$(mktemp)"
+    sed -n 's/.*"signature":"\([A-Za-z0-9+/=]*\)".*/\1/p' "$bundle" | openssl base64 -d -A >"$der"
+    openssl dgst -sha256 -verify "$key" -signature "$der" "$blob" >/dev/null
+    ok=$?
+    rm -f "$der"
+    exit $ok
     ;;
   *) exit 2 ;;
 esac
@@ -92,11 +108,23 @@ esac
     path
 }
 
-/// What the stand-in `cosign sign-blob` writes for `blob` signed as `email`.
-pub fn bundle(email: &str, blob: &Path) -> String {
-    let out = Command::new("sha256sum").arg(blob).output().unwrap();
-    let sum = String::from_utf8(out.stdout).unwrap();
-    format!("{email} {}\n", &sum[..64])
+/// What the stand-in `cosign sign-blob` writes for `blob` signed with `key`. The stand-in goes
+/// in `dir` (and logs there).
+pub fn bundle(dir: &Path, key: &Key, blob: &Path) -> String {
+    let bundle = dir.join("stand-in.bundle");
+    let out = Command::new(cosign(dir))
+        .args(["sign-blob", "--yes", "--key"])
+        .arg(&key.private)
+        .args(["--tlog-upload=false", "--bundle"])
+        .arg(&bundle)
+        .arg(blob)
+        .env("COSIGN_PASSWORD", PASSWORD)
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let text = fs::read_to_string(&bundle).unwrap();
+    fs::remove_file(&bundle).unwrap();
+    text
 }
 
 pub fn cosign_log(dir: &Path) -> String {

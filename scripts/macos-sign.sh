@@ -10,10 +10,11 @@
 #   ... scripts/macos-sign.sh --release vX.Y.Z[-pre]
 #
 # --release downloads every asset of that draft release, signs and notarizes there, and uploads
-# the macOS binaries and the new SHA256SUMS (and SHA256SUMS.sigstore.json or UNSIGNED) in their
-# place. A published release is refused. When the draft's sums were signed, the new sums are
-# signed too, so scripts/sign.sh asks for the release identity's sign-in; an unsigned draft stays
-# unsigned. Make the profile once with `xcrun notarytool store-credentials`.
+# the macOS binaries and the new SHA256SUMS (and SHA256SUMS.cosign.bundle or UNSIGNED) in their
+# place. A published release is refused. The new sums are signed only when this Mac holds the
+# release key (ZONE_COSIGN_KEY, see scripts/sign.sh); otherwise the draft is left UNSIGNED and
+# `scripts/sign.sh --release` on the signing machine signs it. Make the profile once with
+# `xcrun notarytool store-credentials`.
 set -euo pipefail
 scripts="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -62,7 +63,7 @@ if [ -n "${tag}" ]; then
   dist="${work}/dist"
   mkdir "${dist}"
   gh release download "${tag}" --dir "${dist}"
-  if [ -f "${dist}/SHA256SUMS.sigstore.json" ]; then
+  if [ -n "${ZONE_COSIGN_KEY:-}" ]; then
     unset ZONE_UNSIGNED
   else
     export ZONE_UNSIGNED=1
@@ -93,8 +94,8 @@ done
 
 if [ -n "${tag}" ]; then
   uploads=("${bins[@]}" "${dist}/SHA256SUMS")
-  if [ -f "${dist}/SHA256SUMS.sigstore.json" ]; then
-    uploads+=("${dist}/SHA256SUMS.sigstore.json")
+  if [ -f "${dist}/SHA256SUMS.cosign.bundle" ]; then
+    uploads+=("${dist}/SHA256SUMS.cosign.bundle")
     gh release delete-asset "${tag}" UNSIGNED --yes 2>/dev/null || true
   else
     uploads+=("${dist}/UNSIGNED")

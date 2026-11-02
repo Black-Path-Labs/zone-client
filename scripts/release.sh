@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Cuts a draft GitHub release of `zone` on a maintainer's machine; this repo has no CI. From a
 # clean, pushed checkout it runs scripts/check.sh, builds every target (Linux, macOS, Windows),
-# writes SHA256SUMS, signs it with cosign keyless as the release identity (scripts/sign.sh; with
+# writes SHA256SUMS, signs it with cosign and the release key (scripts/sign.sh; with
 # ZONE_UNSIGNED=1 it stays unsigned until `scripts/sign.sh --release`) and uploads them with
 # install.sh to a draft release.
 # A draft is not public and creates no tag; publishing it is a separate, approved step.

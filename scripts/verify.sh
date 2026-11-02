@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Checks a dist directory that scripts/sign.sh wrote: SHA256SUMS.sigstore.json must be a cosign
-# keyless signature of SHA256SUMS by the release identity (admin@blackpathlabs.com, signed in
-# through Google), every file must be listed in SHA256SUMS and every listed file must be present
-# with its sum. An unsigned release fails unless --allow-unsigned is given; then only the sums
+# Checks a dist directory that scripts/sign.sh wrote: SHA256SUMS.cosign.bundle must be a cosign
+# signature of SHA256SUMS by the release key (cosign.pub in this repository; no transparency log
+# entry is expected), every file must be listed in SHA256SUMS and every listed file must be
+# present with its sum. An unsigned release fails unless --allow-unsigned is given; then only the sums
 # are checked.
 #
 #   scripts/verify.sh [--allow-unsigned] <dist dir>
@@ -15,8 +15,8 @@ usage() {
   exit 2
 }
 
-identity="admin@blackpathlabs.com"
-issuer="https://accounts.google.com"
+# Tests point ZONE_COSIGN_PUB at their own key; a release is checked against the repo's.
+pub="${ZONE_COSIGN_PUB:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/cosign.pub}"
 allow_unsigned=0
 dist=""
 while [ "$#" -gt 0 ]; do
@@ -43,18 +43,17 @@ if [ ! -f SHA256SUMS ]; then
   exit 1
 fi
 
-if [ -f SHA256SUMS.sigstore.json ]; then
+if [ -f SHA256SUMS.cosign.bundle ]; then
   cosign="${ZONE_COSIGN:-cosign}"
-  if ! "${cosign}" verify-blob --bundle SHA256SUMS.sigstore.json \
-    --certificate-identity "${identity}" --certificate-oidc-issuer "${issuer}" \
-    SHA256SUMS >/dev/null 2>&1; then
-    echo "verify: SHA256SUMS.sigstore.json is not a good signature of SHA256SUMS by ${identity}" >&2
+  if ! "${cosign}" verify-blob --key "${pub}" --bundle SHA256SUMS.cosign.bundle \
+    --insecure-ignore-tlog=true SHA256SUMS >/dev/null 2>&1; then
+    echo "verify: SHA256SUMS.cosign.bundle is not a good signature of SHA256SUMS by the release key" >&2
     exit 1
   fi
 elif [ "${allow_unsigned}" -eq 1 ]; then
   echo "verify: ${dist} is UNSIGNED; checking sums only" >&2
 else
-  echo "verify: ${dist} has no SHA256SUMS.sigstore.json; pass --allow-unsigned to check sums only" >&2
+  echo "verify: ${dist} has no SHA256SUMS.cosign.bundle; pass --allow-unsigned to check sums only" >&2
   exit 1
 fi
 
@@ -62,7 +61,7 @@ listed="$(sed 's/^[0-9a-f]\{64\}  //' SHA256SUMS)"
 while IFS= read -r -d '' f; do
   f="${f#./}"
   case "${f}" in
-    SHA256SUMS | SHA256SUMS.sigstore.json | UNSIGNED) continue ;;
+    SHA256SUMS | SHA256SUMS.cosign.bundle | UNSIGNED) continue ;;
   esac
   if ! grep -Fxq -- "${f}" <<<"${listed}"; then
     echo "verify: ${f} is not in SHA256SUMS" >&2
