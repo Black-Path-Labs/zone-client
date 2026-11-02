@@ -1,0 +1,24 @@
+#!/bin/sh
+# Refuses an empty message, a Co-authored-by trailer, and any mention of an AI tool.
+# Installed by scripts/setup-git-identity.sh (core.hooksPath=.githooks).
+set -eu
+
+msg_file="$1"
+body="$(grep -v '^#' "$msg_file" || true)"
+
+fail() {
+  echo "commit-msg: $*" >&2
+  exit 1
+}
+
+[ -n "$(printf '%s' "$body" | tr -d '[:space:]')" ] || fail "the commit message is empty"
+
+if printf '%s\n' "$body" | grep -qiE '^[[:space:]]*co-authored-by:'; then
+  fail "remove the Co-authored-by trailer; every commit is authored by Black Path Labs"
+fi
+
+terms='claude|anthropic|cursor|copilot|chatgpt|gpt-[0-9]|openai|codex|gemini|grok|ai-generated|generated (with|by)|🤖'
+if hit="$(printf '%s\n' "$body" | grep -niE "$terms")"; then
+  fail "the message names an AI tool; rewrite these lines:
+$hit"
+fi
