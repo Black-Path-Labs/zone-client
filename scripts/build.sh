@@ -5,10 +5,10 @@
 # system's libraries and are not signed yet. The Windows binary imports only Windows system DLLs.
 # Run it on a maintainer's machine; this repo has no GitHub Actions.
 #
-#   scripts/build.sh x86_64-unknown-linux-musl
-#   scripts/build.sh aarch64-unknown-linux-musl   # needs zig and cargo-zigbuild on PATH
-#   scripts/build.sh x86_64-apple-darwin          # zig and cargo-zigbuild too, as are the
-#   scripts/build.sh aarch64-apple-darwin         #   macOS and Windows targets
+#   scripts/build.sh x86_64-unknown-linux-musl    # every target needs zig and cargo-zigbuild
+#   scripts/build.sh aarch64-unknown-linux-musl   #   on PATH
+#   scripts/build.sh x86_64-apple-darwin
+#   scripts/build.sh aarch64-apple-darwin
 #   scripts/build.sh x86_64-pc-windows-gnu
 #   scripts/build.sh all-linux                    # both Linux targets
 #   scripts/build.sh all                          # every target above
@@ -48,25 +48,16 @@ if [ ! -d "$(rustc --print sysroot)/lib/rustlib/${target}" ]; then
   exit 1
 fi
 
-host="$(rustc -vV | sed -n 's/^host: //p')"
-if [ "${target}" = "${host%%-*}-unknown-linux-musl" ]; then
-  # ring compiles C for the target. musl-gcc is used when present; otherwise the host gcc builds
-  # those objects and the Rust toolchain's self-contained musl links them.
-  cc_var="CC_${target//-/_}"
-  if [ -z "${!cc_var:-}" ] && ! command -v musl-gcc >/dev/null; then
-    export "${cc_var}=gcc"
+# The pinned zig compiles ring's C and links, through cargo-zigbuild, for every target, the
+# build machine's own included. The host's gcc would put its own version string (and its own
+# code) in the binary, so two machines would build different bytes.
+for tool in zig cargo-zigbuild; do
+  if ! command -v "${tool}" >/dev/null; then
+    echo "build: ${tool} is not on PATH; see scripts/cross-toolchain.sh" >&2
+    exit 1
   fi
-  build=(cargo build)
-else
-  # Another architecture or OS: zig compiles ring's C and links, through cargo-zigbuild.
-  for tool in zig cargo-zigbuild; do
-    if ! command -v "${tool}" >/dev/null; then
-      echo "build: ${tool} is not on PATH; see scripts/cross-toolchain.sh" >&2
-      exit 1
-    fi
-  done
-  build=(cargo zigbuild)
-fi
+done
+build=(cargo zigbuild)
 
 # Build-machine paths (the cargo home, this checkout, the target dir) are rewritten in the panic
 # locations the binary carries, so it names no maintainer's home and two checkouts build the same

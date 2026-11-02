@@ -2,7 +2,7 @@
 //! from `--key-file FILE` (mode 0600 enforced on Unix) or, with `--key-file -`, from stdin; never from
 //! argv or the environment, which other local users and process listings can see. The key is
 //! 32 bytes, raw or as 64 hex digits, and is held zeroized. Errors name the source, never bytes
-//! of it.
+//! of it. An invite (`zone join -`, `--invite-file`) is read the same way.
 
 use std::fs::File;
 use std::io::Read;
@@ -15,8 +15,9 @@ use bp_workspace_core::jws::PublicJwk;
 use bp_workspace_core::zone::jwk_thumbprint;
 use zeroize::Zeroizing;
 
-/// The largest input taken as a key, so stdin cannot be made to buffer without end.
+/// The largest input taken as a key or an invite, so stdin cannot be made to buffer without end.
 const MAX_KEY_INPUT: u64 = 4096;
+const MAX_INVITE_INPUT: u64 = 16 * 1024;
 
 /// A checked kit key: the 32-byte secret, zeroed on drop.
 pub struct KitKey {
@@ -26,29 +27,8 @@ pub struct KitKey {
 impl KitKey {
     /// Read `path`, or stdin for `-`.
     pub fn read(path: &Path) -> Result<KitKey, String> {
-        if path == Path::new("-") {
-            return KitKey::parse(read_capped(std::io::stdin().lock())?, "stdin");
-        }
-        let shown = path.display();
-        let f = File::open(path).map_err(|e| format!("key file {shown}: {}", e.kind()))?;
-        #[cfg(unix)]
-        {
-            let mode = f
-                .metadata()
-                .map_err(|e| format!("key file {shown}: {}", e.kind()))?
-                .permissions()
-                .mode();
-            if mode & 0o077 != 0 {
-                return Err(format!(
-                    "key file {shown} is open to others (mode {:03o}); chmod 600 it",
-                    mode & 0o777
-                ));
-            }
-        }
-        KitKey::parse(
-            read_capped(f).map_err(|e| format!("key file {shown}: {e}"))?,
-            &format!("key file {shown}"),
-        )
+        let (raw, source) = read_private(path, "key", MAX_KEY_INPUT)?;
+        KitKey::parse(raw, &source)
     }
 
     fn parse(raw: Zeroizing<Vec<u8>>, source: &str) -> Result<KitKey, String> {
@@ -82,13 +62,52 @@ impl KitKey {
     }
 }
 
-fn read_capped(r: impl Read) -> Result<Zeroizing<Vec<u8>>, String> {
+/// An invite from `path` (mode 0600 on Unix, like a key file), or stdin for `-`, trimmed.
+pub fn read_invite(path: &Path) -> Result<Zeroizing<String>, String> {
+    let (raw, source) = read_private(path, "invite", MAX_INVITE_INPUT)?;
+    let text = std::str::from_utf8(raw.trim_ascii()).map_err(|_| format!("{source}: not text"))?;
+    if text.is_empty() {
+        return Err(format!("{source}: empty"));
+    }
+    Ok(Zeroizing::new(text.to_owned()))
+}
+
+/// The bytes of `path` or of stdin (`-`), at most `cap`, and how to name their source. A file
+/// others can read or write is refused on Unix.
+fn read_private(path: &Path, what: &str, cap: u64) -> Result<(Zeroizing<Vec<u8>>, String), String> {
+    if path == Path::new("-") {
+        return Ok((
+            read_capped(std::io::stdin().lock(), what, cap)?,
+            "stdin".into(),
+        ));
+    }
+    let shown = path.display();
+    let f = File::open(path).map_err(|e| format!("{what} file {shown}: {}", e.kind()))?;
+    #[cfg(unix)]
+    {
+        let mode = f
+            .metadata()
+            .map_err(|e| format!("{what} file {shown}: {}", e.kind()))?
+            .permissions()
+            .mode();
+        if mode & 0o077 != 0 {
+            return Err(format!(
+                "{what} file {shown} is open to others (mode {:03o}); chmod 600 it",
+                mode & 0o777
+            ));
+        }
+    }
+    let raw = read_capped(f, what, cap).map_err(|e| format!("{what} file {shown}: {e}"))?;
+    Ok((raw, format!("{what} file {shown}")))
+}
+
+fn read_capped(r: impl Read, what: &str, cap: u64) -> Result<Zeroizing<Vec<u8>>, String> {
     let mut raw = Zeroizing::new(Vec::new());
-    r.take(MAX_KEY_INPUT + 1)
+    r.take(cap + 1)
         .read_to_end(&mut raw)
         .map_err(|e| e.kind().to_string())?;
-    if raw.len() as u64 > MAX_KEY_INPUT {
-        return Err("key input too long".into());
+    if raw.len() as u64 > cap {
+        return Err(format!("{what} input too long"));
     }
     Ok(raw)
 }
@@ -157,6 +176,6 @@ mod tests {
     #[test]
     fn oversized_input_is_refused() {
         let big = vec![b'a'; MAX_KEY_INPUT as usize + 1];
-        assert!(read_capped(big.as_slice()).is_err());
+        assert!(read_capped(big.as_slice(), "key", MAX_KEY_INPUT).is_err());
     }
 }

@@ -74,7 +74,7 @@ echo "smoke: installed ${bin} (${version})" >&2
 zone() {
   env -u XDG_DATA_HOME HOME="${home}" "${bin}" --key-file "${key}" "$@"
 }
-zone join --kit --timeout "${ZONE_SMOKE_TIMEOUT:-300}" "${ZONE_SMOKE_INVITE}" ||
+printf '%s\n' "${ZONE_SMOKE_INVITE}" | zone join --kit --timeout "${ZONE_SMOKE_TIMEOUT:-300}" - ||
   fail "zone join --kit exited $?"
 status="$(zone status)" || fail "zone status failed"
 echo "${status}"

@@ -44,7 +44,7 @@ fn release() -> Release {
             &format!(
                 "#!/bin/sh\necho \"zone $* HOME=$HOME XDG=${{XDG_DATA_HOME:-}}\" >>'{ctl}/log'\n\
                  case \"$*\" in\n  --version) echo 'zone 0.1.0 ({arch})' ;;\n\
-                 *' join '*) exit \"$(cat '{ctl}/join-exit' 2>/dev/null || echo 0)\" ;;\n\
+                 *' join '*) cat >'{ctl}/join-stdin'; exit \"$(cat '{ctl}/join-exit' 2>/dev/null || echo 0)\" ;;\n\
                  *' status') cat '{ctl}/status' ;;\n  *) exit 9 ;;\nesac\n"
             ),
         );
@@ -60,13 +60,15 @@ fn release() -> Release {
         "{}",
         String::from_utf8_lossy(&out.stderr)
     );
-    // curl -fsSL -o <file> <url>: serves <url>'s last path segment from the release dir.
+    // curl [-w FORMAT] -o <file> <url>: serves <url>'s last path segment from the release dir, or
+    // answers 404. With -w it prints the status and exits 0, as curl does without -f.
     executable(
         &bin.join("curl"),
         &format!(
-            "#!/bin/sh\nout=\nwhile [ $# -gt 1 ]; do\n  [ \"$1\" = -o ] && out=\"$2\"\n  shift\ndone\n\
-             echo \"curl $1\" >>'{log}'\nf='{rel}'/\"${{1##*/}}\"\n[ -f \"$f\" ] || exit 22\n\
-             cp \"$f\" \"$out\"\n",
+            "#!/bin/sh\nout=\nw=\nwhile [ $# -gt 1 ]; do\n  case \"$1\" in\n    -o) out=\"$2\"; shift ;;\n\
+             -w) w=\"$2\"; shift ;;\n  esac\n  shift\ndone\necho \"curl $1\" >>'{log}'\n\
+             f='{rel}'/\"${{1##*/}}\"\nif [ -f \"$f\" ]; then cp \"$f\" \"$out\"; code=200; else code=404; fi\n\
+             if [ -n \"$w\" ]; then printf '%s' \"$code\"; exit 0; fi\n[ \"$code\" = 200 ] || exit 22\n",
             log = log.display(),
             rel = release.display()
         ),
@@ -148,9 +150,14 @@ fn installs_the_release_into_an_empty_home_and_joins() {
         .unwrap_or_else(|| panic!("{log}"));
     assert!(
         join.starts_with(&format!(
-            "zone --key-file {key} join --kit --timeout 300 bpzc1.code HOME="
+            "zone --key-file {key} join --kit --timeout 300 - HOME="
         )),
         "{join}"
+    );
+    // The invite goes in on stdin, never on the command line.
+    assert_eq!(
+        fs::read_to_string(r.tmp.path().join("join-stdin")).unwrap(),
+        "bpzc1.code\n"
     );
     assert!(join.ends_with(" XDG="), "{join}");
     assert!(!join.contains("real-home"), "{join}");
@@ -167,7 +174,7 @@ fn pending_after_join_fails() {
     let out = r.smoke(&[TAG], &[("ZONE_SMOKE_TIMEOUT", "5")]);
     assert!(!out.status.success());
     assert!(text(&out).contains("smoke: not admitted"), "{}", text(&out));
-    assert!(r.log().contains("--timeout 5 bpzc1.code"), "{}", r.log());
+    assert!(r.log().contains("--timeout 5 - HOME="), "{}", r.log());
 }
 
 #[test]

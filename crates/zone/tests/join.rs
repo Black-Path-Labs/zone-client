@@ -88,3 +88,89 @@ fn an_unreachable_core_fails_the_join_with_exit_1() {
         assert!(out.stdout.is_empty(), "{args:?}: {out:?}");
     }
 }
+
+/// `zone` with `stdin` as its standard input.
+fn zone_stdin(state: &Path, args: &[&str], stdin: &[u8]) -> Output {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_zone"))
+        .arg("--state")
+        .arg(state)
+        .args(args)
+        .env_remove("XDG_DATA_HOME")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("run zone");
+    child.stdin.take().unwrap().write_all(stdin).unwrap();
+    child.wait_with_output().unwrap()
+}
+
+#[test]
+fn the_invite_comes_from_stdin_or_a_private_file_and_an_argument_is_warned_about() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = tmp.path().join("zone");
+    let code = unreachable_zone_code();
+
+    // stdin: the same join as the argument, without the warning.
+    let out = zone_stdin(
+        &state,
+        &["join", "--no-wait", "-"],
+        format!("{code}\n").as_bytes(),
+    );
+    assert_eq!(out.status.code(), Some(1), "{out:?}");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("Core unreachable"), "{err}");
+    assert!(!err.contains("shell history"), "{err}");
+
+    // A file: refused while others can read it, taken at 0600.
+    let file = tmp.path().join("invite");
+    std::fs::write(&file, format!("  {code}\n")).unwrap();
+    let path = file.to_str().unwrap();
+    std::fs::set_permissions(&file, Permissions::from_mode(0o644)).unwrap();
+    let out = zone(&state, &["join", "--no-wait", "--invite-file", path]);
+    assert_eq!(out.status.code(), Some(1), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("is open to others (mode 644); chmod 600"),
+        "{out:?}"
+    );
+    std::fs::set_permissions(&file, Permissions::from_mode(0o600)).unwrap();
+    let out = zone(&state, &["join", "--no-wait", "--invite-file", path]);
+    assert_eq!(out.status.code(), Some(1), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("Core unreachable"),
+        "{out:?}"
+    );
+
+    // On the command line it still works, with a warning.
+    let out = zone(&state, &["join", "--no-wait", &code]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("shows in shell history"), "{err}");
+    assert!(err.contains("Core unreachable"), "{err}");
+}
+
+#[test]
+fn invite_sources_that_cannot_work_are_refused_before_any_state() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = tmp.path().join("zone");
+    let file = tmp.path().join("invite");
+    std::fs::write(&file, unreachable_zone_code()).unwrap();
+    std::fs::set_permissions(&file, Permissions::from_mode(0o600)).unwrap();
+
+    // Both the key and the invite on stdin.
+    let out = zone_stdin(&state, &["--key-file", "-", "join", "--kit", "-"], &[1; 32]);
+    assert_eq!(out.status.code(), Some(1), "{out:?}");
+    assert!(String::from_utf8_lossy(&out.stderr).contains("cannot both come from stdin"));
+    // An argument and a file; neither.
+    let out = zone(
+        &state,
+        &["join", "x", "--invite-file", file.to_str().unwrap()],
+    );
+    assert_eq!(out.status.code(), Some(2), "{out:?}");
+    let out = zone(&state, &["join"]);
+    assert_eq!(out.status.code(), Some(2), "{out:?}");
+    // An empty stdin.
+    let out = zone_stdin(&state, &["join", "-"], b"\n");
+    assert_eq!(out.status.code(), Some(1), "{out:?}");
+    assert!(String::from_utf8_lossy(&out.stderr).contains("stdin: empty"));
+    assert!(!state.exists());
+}
