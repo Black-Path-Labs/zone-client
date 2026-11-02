@@ -1,6 +1,7 @@
 //! `zone join` without a Core: what it refuses before making state, and that a Core it
 //! cannot reach fails the join rather than hanging. The real join against a Core is
 //! `scripts/smoke.sh` on a released binary. The test key is bytes 1..=32, a key nobody uses.
+#![cfg(unix)]
 
 use std::fs::Permissions;
 use std::io::Write;

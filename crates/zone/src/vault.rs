@@ -1,9 +1,11 @@
 //! The client's [`SecretVault`]: one random 32-byte key in `<state>/vault.key` (mode 0600) wraps
 //! the SDK store key with AES-256-GCM. A phone holds this key in its keystore; a CLI has the file
 //! system and its permissions, so a key file anyone else can read is refused rather than used.
+//! Windows has no mode bits; there the key file relies on the user profile's ACL.
 
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
+#[cfg(unix)]
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
@@ -41,13 +43,16 @@ impl FileVault {
         let mut key = Zeroizing::new([0u8; 32]);
         match File::open(&path) {
             Ok(mut f) => {
-                let mode = f
-                    .metadata()
-                    .map_err(|e| vault_error(e.kind().to_string()))?
-                    .permissions()
-                    .mode();
-                if mode & 0o077 != 0 {
-                    return Err(vault_error("vault.key is open to others; chmod 600 it"));
+                #[cfg(unix)]
+                {
+                    let mode = f
+                        .metadata()
+                        .map_err(|e| vault_error(e.kind().to_string()))?
+                        .permissions()
+                        .mode();
+                    if mode & 0o077 != 0 {
+                        return Err(vault_error("vault.key is open to others; chmod 600 it"));
+                    }
                 }
                 let mut raw = Zeroizing::new(Vec::new());
                 f.read_to_end(&mut raw)
@@ -59,10 +64,11 @@ impl FileVault {
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 OsRng.fill_bytes(key.as_mut());
-                let mut f = OpenOptions::new()
-                    .write(true)
-                    .create_new(true)
-                    .mode(0o600)
+                let mut opts = OpenOptions::new();
+                opts.write(true).create_new(true);
+                #[cfg(unix)]
+                opts.mode(0o600);
+                let mut f = opts
                     .open(&path)
                     .map_err(|e| vault_error(e.kind().to_string()))?;
                 f.write_all(key.as_ref())
@@ -104,7 +110,7 @@ impl SecretVault for FileVault {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use std::fs::Permissions;

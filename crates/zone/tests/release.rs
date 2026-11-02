@@ -1,5 +1,6 @@
 //! Scripts/release.sh refuses before it builds or calls gh. Each case runs a copy of the
 //! script in a throwaway git repository whose PATH carries a gh that only records being called.
+#![cfg(unix)]
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -129,4 +130,28 @@ fn an_existing_tag_is_refused() {
     git(&repo.dir, &["tag", "v0.1.0-rc.1"]);
     let out = release(&repo, &["v0.1.0-rc.1"]);
     refused(&repo, &out, 1, "tag v0.1.0-rc.1 exists");
+}
+
+#[test]
+fn build_names_every_release_target_and_release_builds_them_all() {
+    let out = Command::new(repo_root().join("scripts/build.sh"))
+        .arg("riscv64gc-unknown-linux-musl")
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    let usage = String::from_utf8_lossy(&out.stderr);
+    for target in [
+        "x86_64-unknown-linux-musl",
+        "aarch64-unknown-linux-musl",
+        "x86_64-apple-darwin",
+        "aarch64-apple-darwin",
+        "x86_64-pc-windows-gnu",
+    ] {
+        assert!(usage.contains(target), "{target} missing from: {usage}");
+    }
+    let script = fs::read_to_string(repo_root().join("scripts/release.sh")).unwrap();
+    assert!(
+        script.contains("\nscripts/build.sh all\n"),
+        "release.sh must build every target"
+    );
 }

@@ -2,7 +2,8 @@
 //! good one the client long-polls Core for news (SDK `wait_for_news`), after a failure it backs
 //! off on the same schedule as `zone join` (backoff.rs). SIGINT or SIGTERM stops it between
 //! syncs: a sync in progress finishes and is recorded, a long-poll or backoff wait is cut short,
-//! and the client exits 0. A second signal exits at once.
+//! and the client exits 0. A second signal exits at once. On Windows the C runtime raises SIGINT
+//! for Ctrl+C; SIGTERM does not arrive there.
 
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};

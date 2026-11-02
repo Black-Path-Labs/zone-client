@@ -1,11 +1,12 @@
 //! The kit key: the operator's standing key for an agent install (SDK `agent_join`). It is read
-//! from `--key-file FILE` (mode 0600 enforced) or, with `--key-file -`, from stdin; never from
+//! from `--key-file FILE` (mode 0600 enforced on Unix) or, with `--key-file -`, from stdin; never from
 //! argv or the environment, which other local users and process listings can see. The key is
 //! 32 bytes, raw or as 64 hex digits, and is held zeroized. Errors name the source, never bytes
 //! of it.
 
 use std::fs::File;
 use std::io::Read;
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
@@ -30,16 +31,19 @@ impl KitKey {
         }
         let shown = path.display();
         let f = File::open(path).map_err(|e| format!("key file {shown}: {}", e.kind()))?;
-        let mode = f
-            .metadata()
-            .map_err(|e| format!("key file {shown}: {}", e.kind()))?
-            .permissions()
-            .mode();
-        if mode & 0o077 != 0 {
-            return Err(format!(
-                "key file {shown} is open to others (mode {:03o}); chmod 600 it",
-                mode & 0o777
-            ));
+        #[cfg(unix)]
+        {
+            let mode = f
+                .metadata()
+                .map_err(|e| format!("key file {shown}: {}", e.kind()))?
+                .permissions()
+                .mode();
+            if mode & 0o077 != 0 {
+                return Err(format!(
+                    "key file {shown} is open to others (mode {:03o}); chmod 600 it",
+                    mode & 0o777
+                ));
+            }
         }
         KitKey::parse(
             read_capped(f).map_err(|e| format!("key file {shown}: {e}"))?,
@@ -89,7 +93,7 @@ fn read_capped(r: impl Read) -> Result<Zeroizing<Vec<u8>>, String> {
     Ok(raw)
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use std::fs::Permissions;

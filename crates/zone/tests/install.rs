@@ -2,6 +2,7 @@
 //! and a gh that copy from that directory and record what they were asked for. A changed binary,
 //! a bad signature and an unsigned release once a key is set all fail and install nothing.
 //! minisign is ZONE_MINISIGN or minisign on PATH (scripts/release-tools.sh).
+#![cfg(unix)]
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;

@@ -116,7 +116,7 @@ pub fn identity(device: &ZoneDevice) -> Result<Option<Identity>, String> {
     }))
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;

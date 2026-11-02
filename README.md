@@ -7,7 +7,7 @@ This repository is private until release.
 
 ## Install
 
-On Linux (x86_64 or arm64):
+On Linux (x86_64 or arm64) or macOS (Intel or Apple silicon):
 
 ```sh
 curl -fsSL https://github.com/Black-Path-Labs/zone-client/releases/latest/download/install.sh | sh
@@ -19,6 +19,20 @@ minisign signature when `minisign` is installed, otherwise it prints the command
 installs to `~/.local/bin/zone`. It never uses sudo. `ZONE_VERSION=v0.1.0` pins a release and
 `ZONE_INSTALL_DIR` replaces `~/.local/bin`. While the repository is private, `ZONE_GH=1`
 downloads with `gh release download` and gh's login.
+
+macOS binaries are not signed or notarized yet. `install.sh` downloads with curl, which sets no
+quarantine flag, so the binary runs. A binary downloaded with a browser is quarantined, and
+Gatekeeper refuses to open it; once its sum checks out, clear the flag:
+
+```sh
+xattr -d com.apple.quarantine ./zone-0.1.0-aarch64-apple-darwin
+```
+
+On Windows (x86_64), download `zone-<version>-x86_64-pc-windows-gnu.exe` and `SHA256SUMS` from
+the release and compare the sum (`certutil -hashfile <file> SHA256`). The Windows binary has not
+been run on a Windows machine yet. Windows has no file modes, so the client does not check the
+permissions of its key files there; it keeps its state in `%LOCALAPPDATA%\zone`, which the user
+profile's ACL limits to the user, SYSTEM and Administrators.
 
 ## Verify a download
 
@@ -48,10 +62,10 @@ pushed:
 scripts/release.sh v0.1.0-rc.1
 ```
 
-runs `scripts/check.sh`, builds the Linux x86_64 and arm64 binaries, writes `SHA256SUMS` (signed
-when `ZONE_SIGN_KEY` is set) and uploads them to a draft GitHub release. It refuses a dirty tree
-or a tag or release that exists. `ZONE_BUILD_LOCK=<file>` holds `flock` on that file through the
-gate and builds. A draft is published only with a recorded approval:
+runs `scripts/check.sh`, builds the Linux (x86_64, arm64), macOS (x86_64, arm64) and Windows
+(x86_64) binaries, writes `SHA256SUMS` (signed when `ZONE_SIGN_KEY` is set) and uploads them to
+a draft GitHub release. It refuses a dirty tree or a tag or release that exists.
+`ZONE_BUILD_LOCK=<file>` holds `flock` on that file through the gate and builds. A draft is published only with a recorded approval:
 `ZONE_RELEASE_APPROVED=<approval id> scripts/release.sh --publish v0.1.0-rc.1`.
 
 `scripts/repro.sh x86_64-unknown-linux-musl` builds a target twice from nothing and fails unless
