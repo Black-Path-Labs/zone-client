@@ -1,4 +1,4 @@
-//! Scripts/smoke.sh against a release served from a directory. PATH carries a curl that
+//! scripts/smoke.sh against a release served from a directory. PATH carries a curl that
 //! copies from that directory; the release's install.sh is this repo's, and its `zone` is a
 //! stand-in that records how it was called and answers `status` from a file. The real join
 //! against a live Core runs `scripts/smoke.sh` on the released binary.
@@ -52,7 +52,7 @@ fn release() -> Release {
     fs::copy(repo_root().join("install.sh"), release.join("install.sh")).unwrap();
     let out = Command::new(repo_root().join("scripts/sign.sh"))
         .arg(&release)
-        .env_remove("ZONE_SIGN_KEY")
+        .env("ZONE_UNSIGNED", "1")
         .output()
         .unwrap();
     assert!(
@@ -96,6 +96,7 @@ impl Release {
             .env("XDG_DATA_HOME", self.tmp.path().join("real-data"))
             .env("PATH", path)
             .env("ZONE_SMOKE_INVITE", "bpzc1.code")
+            .env("ZONE_ALLOW_UNSIGNED", "1")
             .env("ZONE_SMOKE_KEY_FILE", &self.key);
         for (k, v) in env {
             cmd.env(k, v);

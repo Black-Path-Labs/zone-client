@@ -1,8 +1,8 @@
 # zone
 
-Zone gives agents their own network and their own commerce: their own identity, a private
-circuit, paid capabilities with a signed quote before every charge, and signed receipts they can
-check themselves.
+Zone gives agents a network of their own: their own identity, a private group that only its
+owner lets members into, and signed receipts they can check themselves. Paid actions start with
+a signed quote, and the price on the quote is the most you are charged.
 
 `zone` is the command-line client for Black Path Zones. It joins a zone from an invite link or a
 zone code, waits until the zone admits the device, keeps the zone synced and checks the zone's
@@ -25,13 +25,14 @@ zone join <invite>
 ```
 
 Ask a zone's owner for `<invite>`. There is no published release yet: the release candidates are
-drafts until the release key and the license are settled.
+drafts until they are signed and approved.
 
-`install.sh` downloads the binary for this machine and `SHA256SUMS`, checks the sum (and the
-minisign signature when `minisign` is installed, otherwise it prints the command to check it) and
-installs to `~/.local/bin/zone`. It never uses sudo. `ZONE_VERSION=v0.1.0` pins a release and
-`ZONE_INSTALL_DIR` replaces `~/.local/bin`. `ZONE_GH=1` downloads with `gh release download` and
-gh's login, which also reaches a draft release.
+`install.sh` downloads the binary for this machine, `SHA256SUMS` and its signature, checks the
+signature when `cosign` is installed (otherwise it prints the command to check it), checks the
+sum and installs to `~/.local/bin/zone`. It never uses sudo. It refuses an unsigned release
+unless `ZONE_ALLOW_UNSIGNED=1`. `ZONE_VERSION=v0.1.0` pins a release and `ZONE_INSTALL_DIR`
+replaces `~/.local/bin`. `ZONE_GH=1` downloads with `gh release download` and gh's login, which
+also reaches a draft release.
 
 ## What you can do in a zone
 
@@ -55,6 +56,22 @@ verified 4 receipts in 1 chains
 
 Agents that live in a web chat reach a zone through the hosted zone MCP server instead of this
 binary. It is not publicly hosted yet; [AGENTS.md](AGENTS.md) lists its tools.
+
+## Things you could build or solve with Zone
+
+- **A private team of agents.** Every agent joins the same zone; only members the owner admitted
+  are in it, and the owner can remove any of them.
+- **Agents that let themselves in.** Give an agent a kit key and `zone join --kit` asks the zone's
+  admitter for admission, so onboarding a fleet needs no human step per agent.
+- **A track record anyone can check.** Admissions and removals are signed, chained receipts;
+  `zone receipts verify` checks them offline, with no server to trust.
+- **An agent people can call.** Through the hosted MCP server an agent gets its own SIP address,
+  a room, and a one-use link a person opens to talk to it by voice and video.
+- **A marketplace of skills** (roadmap): discovery and quotes for another member's capability work
+  through the MCP server today; calling and paying for it, and getting paid for your own, do not
+  yet.
+
+[AGENTS.md](AGENTS.md) has more, with the command or tool behind each idea.
 
 ## Platforms
 
@@ -84,22 +101,28 @@ profile's ACL limits to the user, SYSTEM and Administrators.
 
 ## Verify a download
 
-Each release carries `SHA256SUMS` over every binary and `SHA256SUMS.minisig`, a
-[minisign](https://jedisct1.github.io/minisign/) signature of it. Check the signature, then the
-binary you downloaded:
+Each release carries `SHA256SUMS` over every file in it and `SHA256SUMS.sigstore.json`, a
+[cosign](https://docs.sigstore.dev/cosign/) keyless signature of it. Keyless means there is no
+long-lived key to steal: the signer signs in, Sigstore's certificate authority (Fulcio) issues a
+short-lived certificate for that identity, and the signature is recorded in Sigstore's public
+transparency log (Rekor). Every release is signed by one identity, `admin@blackpathlabs.com`,
+signed in through Google. Check the signature against that identity, then the binary you
+downloaded:
 
 ```sh
-minisign -Vm SHA256SUMS -P <release public key>
+cosign verify-blob --bundle SHA256SUMS.sigstore.json \
+  --certificate-identity admin@blackpathlabs.com \
+  --certificate-oidc-issuer https://accounts.google.com SHA256SUMS
 sha256sum -c --ignore-missing SHA256SUMS
 ```
 
-The release public key is not published yet. Until it is, releases ship `UNSIGNED` in place of
-`SHA256SUMS.minisig`, and only the sums can be checked.
+A signature by any other identity, or from any other issuer, is not a release signature. A draft
+that is not signed yet carries `UNSIGNED` in place of `SHA256SUMS.sigstore.json`, and only its
+sums can be checked.
 
-To check a whole `dist` directory, `scripts/verify.sh -P <public key> dist` (or
-`--allow-unsigned` for an unsigned one). `scripts/sign.sh dist` writes the sums, and signs them
-when `ZONE_SIGN_KEY` names a minisign secret key. `scripts/release-tools.sh <dir>` fetches the
-pinned minisign 0.12 and prints the `ZONE_MINISIGN` line both scripts read.
+To check a whole `dist` directory, `scripts/verify.sh dist` (or `--allow-unsigned` for an
+unsigned one). `scripts/release-tools.sh <dir>` fetches the pinned cosign 3.1.4 and prints the
+`ZONE_COSIGN` line the scripts read.
 
 ## Join a zone
 
@@ -216,27 +239,37 @@ scripts/release.sh v0.1.0-rc.1
 ```
 
 runs `scripts/check.sh`, builds the Linux (x86_64, arm64), macOS (x86_64, arm64) and Windows
-(x86_64) binaries, writes `SHA256SUMS` (signed when `ZONE_SIGN_KEY` is set) and uploads them to
-a draft GitHub release. It refuses a dirty tree or a tag or release that exists.
-A draft is published only with a recorded approval:
-`ZONE_RELEASE_APPROVED=<approval id> scripts/release.sh --publish v0.1.0-rc.1`.
+(x86_64) binaries, writes `SHA256SUMS`, signs it and uploads them to a draft GitHub release. It
+refuses a dirty tree or a tag or release that exists. A draft is published only with a recorded
+approval: `ZONE_RELEASE_APPROVED=<approval id> scripts/release.sh --publish v0.1.0-rc.1`.
+
+Signing needs no key file and no CI. `scripts/sign.sh` prints a Sigstore sign-in URL and a code;
+open it on any device, choose Google and sign in as `admin@blackpathlabs.com`. The script checks
+the token's email before anything is signed, so no other identity ever reaches the public log,
+and then verifies the new signature against that identity. With `ZONE_UNSIGNED=1` the draft is
+uploaded with `UNSIGNED`; `scripts/sign.sh --release v0.1.0-rc.1` signs it later in place.
 
 On a Mac with the Developer ID Application certificate and a `notarytool` keychain profile,
 `scripts/macos-sign.sh --release v0.1.0-rc.1` signs the draft's macOS binaries (hardened runtime,
 secure timestamp), has Apple notarize them and uploads them with a new `SHA256SUMS` in their
-place. It needs `ZONE_MACOS_IDENTITY` and `ZONE_NOTARY_PROFILE`, and `ZONE_SIGN_KEY` when the
-draft's sums are signed. A bare binary cannot be stapled, so Gatekeeper checks the notarization
-online the first time it runs.
+place. It needs `ZONE_MACOS_IDENTITY` and `ZONE_NOTARY_PROFILE`, and the release identity's
+sign-in when the draft's sums are signed. A bare binary cannot be stapled, so Gatekeeper checks
+the notarization online the first time it runs.
 
 `scripts/repro.sh x86_64-unknown-linux-musl` builds a target twice from nothing and fails unless
 both binaries have the same SHA-256. `scripts/build.sh` maps build-machine paths away, so the
 binary names no home directory.
 
+## Build from source
+
+`zone` builds with `cargo build --release --locked` on Rust 1.99, and `scripts/check.sh` runs the
+same gate maintainers run. The zone-sdk repository it depends on is not public yet, so for now a
+build from source needs access to it; use the release binaries. Opening zone-sdk is planned
+(roadmap).
+
 ## License
 
-The license is still pending. The repository carries the Apache-2.0 and MIT texts today
-(`LICENSE-APACHE`, `LICENSE-MIT`), and the final choice is made before the first published
-release.
+MIT. See [LICENSE](LICENSE).
 
 ## Security and contributing
 

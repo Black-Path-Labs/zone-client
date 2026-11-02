@@ -1,21 +1,20 @@
 #!/bin/sh
 # Installs the `zone` client: downloads the release binary for this OS and CPU with its
-# SHA256SUMS, checks the sum (and the minisign signature when minisign is installed) and puts it
-# in ~/.local/bin/zone. It never uses sudo.
+# SHA256SUMS, checks the sum (and the cosign keyless signature of SHA256SUMS when cosign is
+# installed) and puts it in ~/.local/bin/zone. It never uses sudo.
 #
 #   curl -fsSL https://github.com/Black-Path-Labs/zone-client/releases/latest/download/install.sh | sh
 #   curl -fsSL .../install.sh | ZONE_VERSION=v0.1.0 sh      # a pinned release
 #
 # ZONE_INSTALL_DIR replaces ~/.local/bin. ZONE_GH=1 downloads with `gh release download`, which
-# also reaches a private repository or a draft release with gh's login. ZONE_PUBKEY replaces the
-# release public key below. Once a key is set, an unsigned release is refused unless
-# ZONE_ALLOW_UNSIGNED=1.
+# also reaches a private repository or a draft release with gh's login. An unsigned release is
+# refused unless ZONE_ALLOW_UNSIGNED=1.
 set -eu
 
 repo="Black-Path-Labs/zone-client"
-# The release public key. None is published yet, so releases are UNSIGNED and only the sums
-# can be checked.
-pubkey="${ZONE_PUBKEY:-}"
+# Who signs releases: cosign keyless (Sigstore), this identity, signed in through this issuer.
+identity="admin@blackpathlabs.com"
+issuer="https://accounts.google.com"
 
 fail() {
   echo "zone install: $*" >&2
@@ -63,11 +62,11 @@ fetch() {
 
 if [ "${ZONE_GH:-}" = 1 ]; then
   gh release download ${version:+"${version}"} -R "${repo}" -D "${tmp}" \
-    -p SHA256SUMS -p 'SHA256SUMS.minisig' -p "zone-*-${target}" ||
+    -p SHA256SUMS -p 'SHA256SUMS.sigstore.json' -p "zone-*-${target}" ||
     fail "gh release download failed"
 else
   fetch SHA256SUMS || fail "cannot download SHA256SUMS"
-  fetch SHA256SUMS.minisig 2>/dev/null || rm -f "${tmp}/SHA256SUMS.minisig"
+  fetch SHA256SUMS.sigstore.json 2>/dev/null || rm -f "${tmp}/SHA256SUMS.sigstore.json"
 fi
 
 name="$(sed -n "s/^[0-9a-f]\{64\}  \(zone-[^ ]*-${target}\)\$/\1/p" "${tmp}/SHA256SUMS" | head -1)"
@@ -78,22 +77,18 @@ if [ "${ZONE_GH:-}" != 1 ]; then
 fi
 [ -f "${tmp}/${name}" ] || fail "the release has no ${name}"
 
-if [ ! -f "${tmp}/SHA256SUMS.minisig" ] && [ -n "${pubkey}" ] &&
-  [ "${ZONE_ALLOW_UNSIGNED:-}" != 1 ]; then
-  fail "the release is not signed; set ZONE_ALLOW_UNSIGNED=1 to install it on its SHA-256 alone"
-elif [ -f "${tmp}/SHA256SUMS.minisig" ] && [ -n "${pubkey}" ]; then
-  if command -v minisign >/dev/null 2>&1; then
-    minisign -Vq -P "${pubkey}" -m "${tmp}/SHA256SUMS" -x "${tmp}/SHA256SUMS.minisig" ||
-      fail "SHA256SUMS.minisig is not a good signature of SHA256SUMS"
-    echo "zone install: signature OK" >&2
-  else
-    echo "zone install: minisign is not installed, so the signature was not checked. To check it:" >&2
-    echo "  minisign -Vm SHA256SUMS -P ${pubkey}" >&2
-  fi
-elif [ -f "${tmp}/SHA256SUMS.minisig" ]; then
-  echo "zone install: no release public key is published yet; only the SHA-256 is checked" >&2
-else
+verify="cosign verify-blob --bundle SHA256SUMS.sigstore.json --certificate-identity ${identity} --certificate-oidc-issuer ${issuer} SHA256SUMS"
+if [ ! -f "${tmp}/SHA256SUMS.sigstore.json" ]; then
+  [ "${ZONE_ALLOW_UNSIGNED:-}" = 1 ] ||
+    fail "the release is not signed; set ZONE_ALLOW_UNSIGNED=1 to install it on its SHA-256 alone"
   echo "zone install: this release is UNSIGNED; only its SHA-256 is checked" >&2
+elif command -v cosign >/dev/null 2>&1; then
+  (cd "${tmp}" && ${verify} >/dev/null 2>&1) ||
+    fail "SHA256SUMS.sigstore.json is not a good signature of SHA256SUMS by ${identity}"
+  echo "zone install: signature OK (${identity})" >&2
+else
+  echo "zone install: cosign is not installed, so the signature was not checked. To check it:" >&2
+  echo "  ${verify}" >&2
 fi
 
 got="$(sha256 "${tmp}/${name}")"
