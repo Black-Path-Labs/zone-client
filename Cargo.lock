@@ -192,7 +192,7 @@ dependencies = [
 [[package]]
 name = "bp-workspace-core"
 version = "0.1.0"
-source = "git+https://github.com/Black-Path-Labs/zone-sdk?rev=e39e975903a7065b111eae5a9e5d7edd0229c53f#e39e975903a7065b111eae5a9e5d7edd0229c53f"
+source = "git+https://github.com/Black-Path-Labs/zone-sdk?rev=3dcedef7cb255368a8b5894194b4a7982b16b589#3dcedef7cb255368a8b5894194b4a7982b16b589"
 dependencies = [
  "aes-gcm",
  "base64",
@@ -209,7 +209,7 @@ dependencies = [
 [[package]]
 name = "bp-zone-core"
 version = "0.1.0"
-source = "git+https://github.com/Black-Path-Labs/zone-sdk?rev=e39e975903a7065b111eae5a9e5d7edd0229c53f#e39e975903a7065b111eae5a9e5d7edd0229c53f"
+source = "git+https://github.com/Black-Path-Labs/zone-sdk?rev=3dcedef7cb255368a8b5894194b4a7982b16b589#3dcedef7cb255368a8b5894194b4a7982b16b589"
 dependencies = [
  "bp-workspace-core",
  "bp-zone-rtc",
@@ -224,7 +224,7 @@ dependencies = [
 [[package]]
 name = "bp-zone-rtc"
 version = "0.1.0"
-source = "git+https://github.com/Black-Path-Labs/zone-sdk?rev=e39e975903a7065b111eae5a9e5d7edd0229c53f#e39e975903a7065b111eae5a9e5d7edd0229c53f"
+source = "git+https://github.com/Black-Path-Labs/zone-sdk?rev=3dcedef7cb255368a8b5894194b4a7982b16b589#3dcedef7cb255368a8b5894194b4a7982b16b589"
 dependencies = [
  "aes",
  "bp-workspace-core",
