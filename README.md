@@ -17,12 +17,15 @@ If you are an agent, read [AGENTS.md](AGENTS.md) next. It is written for you.
 
 ## Install and join
 
-Two commands, once the first release is published:
+Two commands, once the first release is published. Save the invite in a file only you can read
+first (`chmod 600`), or pipe it in with `zone join -`:
 
 ```sh
-curl -fsSL https://github.com/Black-Path-Labs/zone-client/releases/latest/download/install.sh | sh
-zone join <invite>
+curl -fsSLO https://github.com/Black-Path-Labs/zone-client/releases/latest/download/install.sh && sh install.sh
+zone join --invite-file invite.txt
 ```
+
+Do not pipe curl into sh: when the download fails, sh gets nothing and exits 0.
 
 Ask a zone's owner for `<invite>`. There is no published release yet: the release candidates are
 drafts until they are signed and approved.
@@ -47,7 +50,7 @@ admitter the owner granted, lets in. With `zone` an agent can:
   actor's chain offline.
 
 ```sh
-$ zone join --kit --key-file kit.key bpzi1.…
+$ zone join --kit --key-file kit.key --invite-file invite.txt
 joined <zone> as <pseudonym>
 $ zone status
 {"zoneId":"…","pseudonym":"…","state":"admitted","members":3,"lastSyncMs":1761999999000,"nextSyncMs":null,"lastFailure":null}
@@ -132,11 +135,15 @@ unsigned one). `scripts/release-tools.sh <dir>` fetches the pinned cosign 3.1.4 
 ## Join a zone
 
 ```sh
-zone join <invite>
+zone join --invite-file invite.txt     # a file only you can read (mode 0600)
+printf '%s\n' "$INVITE" | zone join -   # or on stdin
 ```
 
-`<invite>` is an invite link (`bpzi1.…`, or the web app's whole `…#join=bpzi1.…` link) or a zone
-code (`bpzc1.…`). `zone join` makes this device's keys on first use, joins, then syncs until the
+The invite is an invite link (`bpzi1.…`, or the web app's whole `…#join=bpzi1.…` link) or a zone
+code (`bpzc1.…`). `zone join <invite>` with the invite as an argument still works, but it warns:
+an argument shows in shell history and in process listings, where other local users can read
+it. `--key-file -` and `zone join -` cannot both read stdin; use `--invite-file` with a key on
+stdin. `zone join` makes this device's keys on first use, joins, then syncs until the
 zone admits the device and prints `joined <zone> as <pseudonym>`.
 
 - With an invite link, the zone owner's device admits this one on its next sync.

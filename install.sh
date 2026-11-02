@@ -4,8 +4,12 @@
 # openssl when cosign is not installed) and the binary's sum, and puts it in ~/.local/bin/zone.
 # It never uses sudo.
 #
-#   curl -fsSL https://github.com/Black-Path-Labs/zone-client/releases/latest/download/install.sh | sh
-#   curl -fsSL .../install.sh | ZONE_VERSION=v0.1.0 sh      # a pinned release
+#   curl -fsSLO https://github.com/Black-Path-Labs/zone-client/releases/latest/download/install.sh && sh install.sh
+#   ZONE_VERSION=v0.1.0 sh install.sh      # a pinned release
+#
+# Download it first, as above, rather than piping curl into sh: when the download fails, a pipe
+# hands sh nothing and the install "succeeds" with exit 0. This script exits non-zero, saying
+# which file is missing, when the release or a file in it is not found.
 #
 # ZONE_INSTALL_DIR replaces ~/.local/bin. ZONE_GH=1 downloads with `gh release download`, which
 # also reaches a private repository or a draft release with gh's login. An unsigned release is
@@ -49,19 +53,38 @@ version="${ZONE_VERSION:-}"
 tmp="$(mktemp -d)"
 trap 'rm -rf "${tmp}"' EXIT INT TERM
 
+if [ -n "${version}" ]; then
+  base="https://github.com/${repo}/releases/download/${version}"
+  missing="there is no release ${version}"
+else
+  base="https://github.com/${repo}/releases/latest/download"
+  missing="no release is published yet; set ZONE_VERSION to a release tag, or ZONE_GH=1 for a draft"
+fi
+
+# fetch FILE: the release's FILE into ${tmp}. Non-zero unless the server answered 200; then
+# ${status} is the HTTP status (000: not reached).
 fetch() {
-  if [ -n "${version}" ]; then
-    base="https://github.com/${repo}/releases/download/${version}"
-  else
-    base="https://github.com/${repo}/releases/latest/download"
-  fi
+  status=000
   if command -v curl >/dev/null 2>&1; then
-    curl -fsSL -o "${tmp}/$1" "${base}/$1"
+    status="$(curl -sSL -w '%{http_code}' -o "${tmp}/$1" "${base}/$1")" || status=000
   elif command -v wget >/dev/null 2>&1; then
-    wget -q -O "${tmp}/$1" "${base}/$1"
+    if wget -q -O "${tmp}/$1" "${base}/$1"; then status=200; fi
   else
     fail "needs curl or wget"
   fi
+  [ "${status}" = 200 ] && return 0
+  rm -f "${tmp}/$1"
+  return 1
+}
+
+# need FILE: fetch FILE or fail, saying why.
+need() {
+  fetch "$1" && return 0
+  case "${status}" in
+    404) fail "${base}/$1 was not found (HTTP 404): ${missing}" ;;
+    000) fail "cannot reach ${base}/$1" ;;
+    *) fail "cannot download ${base}/$1 (HTTP ${status})" ;;
+  esac
 }
 
 if [ "${ZONE_GH:-}" = 1 ]; then
@@ -69,15 +92,15 @@ if [ "${ZONE_GH:-}" = 1 ]; then
     -p SHA256SUMS -p 'SHA256SUMS.cosign.bundle' -p "zone-*-${target}" ||
     fail "gh release download failed"
 else
-  fetch SHA256SUMS || fail "cannot download SHA256SUMS"
-  fetch SHA256SUMS.cosign.bundle 2>/dev/null || rm -f "${tmp}/SHA256SUMS.cosign.bundle"
+  need SHA256SUMS
+  fetch SHA256SUMS.cosign.bundle || [ "${status}" = 404 ] || need SHA256SUMS.cosign.bundle
 fi
 
 name="$(sed -n "s/^[0-9a-f]\{64\}  \(zone-[^ ]*-${target}\)\$/\1/p" "${tmp}/SHA256SUMS" | head -1)"
 [ -n "${name}" ] || fail "the release has no zone binary for ${target}"
 want="$(sed -n "s/^\([0-9a-f]\{64\}\)  ${name}\$/\1/p" "${tmp}/SHA256SUMS")"
 if [ "${ZONE_GH:-}" != 1 ]; then
-  fetch "${name}" || fail "cannot download ${name}"
+  need "${name}"
 fi
 [ -f "${tmp}/${name}" ] || fail "the release has no ${name}"
 
@@ -120,4 +143,5 @@ case ":${PATH}:" in
   *":${dir}:"*) ;;
   *) echo "zone install: add ${dir} to PATH" >&2 ;;
 esac
-echo "Next: zone join <invite>"
+echo "Next: save the invite to a file only you can read, then: zone join --invite-file <file>"
+echo "  (or pipe it in: zone join -). Not as an argument: that shows in shell history."

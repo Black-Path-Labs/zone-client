@@ -58,13 +58,15 @@ fn release() -> Release {
         String::from_utf8_lossy(&out.stderr)
     );
 
-    // curl -fsSL -o <file> <url>: serves <url>'s last path segment from the release dir.
+    // curl [-w FORMAT] -o <file> <url>: serves <url>'s last path segment from the release dir, or
+    // answers 404. With -w it prints the status and exits 0, as curl does without -f.
     executable(
         &bin.join("curl"),
         &format!(
-            "#!/bin/sh\nout=\nwhile [ $# -gt 1 ]; do\n  [ \"$1\" = -o ] && out=\"$2\"\n  shift\ndone\n\
-             echo \"curl $1\" >>'{log}'\nf='{rel}'/\"${{1##*/}}\"\n[ -f \"$f\" ] || exit 22\n\
-             cp \"$f\" \"$out\"\n",
+            "#!/bin/sh\nout=\nw=\nwhile [ $# -gt 1 ]; do\n  case \"$1\" in\n    -o) out=\"$2\"; shift ;;\n\
+             -w) w=\"$2\"; shift ;;\n  esac\n  shift\ndone\necho \"curl $1\" >>'{log}'\n\
+             f='{rel}'/\"${{1##*/}}\"\nif [ -f \"$f\" ]; then cp \"$f\" \"$out\"; code=200; else code=404; fi\n\
+             if [ -n \"$w\" ]; then printf '%s' \"$code\"; exit 0; fi\n[ \"$code\" = 200 ] || exit 22\n",
             log = log.display(),
             rel = release.display()
         ),
@@ -151,7 +153,10 @@ fn installs_latest_into_local_bin() {
     let out = r.install(&[]);
     assert!(out.status.success(), "{}", stderr(&out));
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(stdout.contains("Next: zone join <invite>"), "{stdout}");
+    assert!(
+        stdout.contains("zone join --invite-file <file>"),
+        "{stdout}"
+    );
     assert!(
         stderr(&out).contains("signature OK (cosign, release key)"),
         "{}",
@@ -348,6 +353,62 @@ fn an_unsigned_release_is_refused_unless_allowed() {
     let out = r.install(&[("ZONE_ALLOW_UNSIGNED", "1")]);
     assert!(out.status.success(), "{}", stderr(&out));
     assert!(stderr(&out).contains("UNSIGNED"), "{}", stderr(&out));
+}
+
+#[test]
+fn a_missing_release_or_file_fails_loudly() {
+    // No release at all: nothing published yet, or no such tag.
+    let r = Release::signed();
+    for f in fs::read_dir(&r.release).unwrap() {
+        fs::remove_file(f.unwrap().path()).unwrap();
+    }
+    let out = r.install(&[]);
+    assert_eq!(out.status.code(), Some(1), "{out:?}");
+    assert!(
+        stderr(&out).contains(
+            "releases/latest/download/SHA256SUMS was not found (HTTP 404): no release is published yet"
+        ),
+        "{}",
+        stderr(&out)
+    );
+    let out = r.install(&[("ZONE_VERSION", "v9.9.9")]);
+    assert_eq!(out.status.code(), Some(1), "{out:?}");
+    assert!(
+        stderr(&out).contains("there is no release v9.9.9"),
+        "{}",
+        stderr(&out)
+    );
+    assert!(!r.installed().exists());
+
+    // A release whose binary is missing.
+    let r = Release::signed();
+    let name = format!("zone-0.1.0-{}-unknown-linux-musl", host_arch());
+    fs::remove_file(r.release.join(&name)).unwrap();
+    let out = r.install(&[]);
+    assert_eq!(out.status.code(), Some(1), "{out:?}");
+    assert!(
+        stderr(&out).contains(&format!("{name} was not found (HTTP 404)")),
+        "{}",
+        stderr(&out)
+    );
+    assert!(!r.installed().exists());
+}
+
+/// The documented install line downloads install.sh and then runs it, so a failed download fails
+/// the line; `curl … | sh` would hand sh nothing and exit 0.
+#[test]
+fn the_docs_never_pipe_curl_into_sh() {
+    let line = "curl -fsSLO https://github.com/Black-Path-Labs/zone-client/releases/latest/download/install.sh && sh install.sh";
+    for doc in ["README.md", "AGENTS.md", "install.sh"] {
+        let text = fs::read_to_string(repo_root().join(doc)).unwrap();
+        assert!(text.contains(line), "{doc} lacks the install line");
+        assert!(
+            !text
+                .lines()
+                .any(|l| l.contains("install.sh |") || l.contains("| sh")),
+            "{doc} pipes curl into sh"
+        );
+    }
 }
 
 #[test]

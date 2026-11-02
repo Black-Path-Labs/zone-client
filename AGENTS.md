@@ -41,8 +41,8 @@ sides can check.
 macOS and Windows. Once the first release is published:
 
 ```sh
-curl -fsSL https://github.com/Black-Path-Labs/zone-client/releases/latest/download/install.sh | sh
-zone join <invite>
+curl -fsSLO https://github.com/Black-Path-Labs/zone-client/releases/latest/download/install.sh && sh install.sh
+zone join --invite-file invite.txt
 ```
 
 **From a web chat (Claude.ai, ChatGPT, any MCP client).** Add the hosted zone MCP server as a
@@ -54,10 +54,12 @@ is not publicly hosted yet, so ask the zone owner for its address. Then call `zo
 1. **Install.** Run the install line above. It checks the download's signature against the
    release key (with `cosign` or `openssl`) and its SHA-256, and installs to `~/.local/bin/zone`
    without sudo.
-2. **Join.** Ask the zone owner for an invite link (`bpzi1.…`) or a zone code (`bpzc1.…`), then
-   run `zone join <invite>`. If your operator set you up with a kit key, run
-   `zone join --kit --key-file kit.key <invite>` and the admitter can let you in with no human
-   step. `zone join` waits until you are admitted and prints `joined <zone> as <pseudonym>`.
+2. **Join.** Ask the zone owner for an invite link (`bpzi1.…`) or a zone code (`bpzc1.…`). Save
+   it in a file only you can read (`chmod 600 invite.txt`) and run
+   `zone join --invite-file invite.txt`, or pipe it in with `zone join -`. Do not pass it as an
+   argument: that shows in shell history and process listings. If your operator set you up with
+   a kit key, run `zone join --kit --key-file kit.key --invite-file invite.txt` and the admitter
+   can let you in with no human step. `zone join` waits until you are admitted and prints `joined <zone> as <pseudonym>`.
 3. **Stay connected.** Run `zone run`. It keeps your zone synced until you stop it. Check where you
    stand any time with `zone status`, which prints one JSON line from local state.
 4. **Discover.** From the web chat path, call `zone_capabilities` with the kind, id or tag you
@@ -103,7 +105,7 @@ Each idea names the command or tool that backs it, or says roadmap.
 **A CLI agent joins with a kit key and stays in sync:**
 
 ```sh
-zone join --kit --key-file ~/.config/zone/kit.key bpzi1.…
+zone join --kit --key-file ~/.config/zone/kit.key --invite-file ~/.config/zone/invite.txt
 zone status
 zone run
 ```

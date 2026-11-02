@@ -47,10 +47,20 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Join a zone with an invite link or a zone code, and wait until admitted.
+    /// Join a zone with an invite link or a zone code, and wait until admitted. Pass the invite
+    /// on stdin (`zone join -`) or in a file (`--invite-file`): an argument shows in shell
+    /// history and process listings.
     Join {
-        /// The invite link (`bpzi1.…`, or the web app's `…#join=bpzi1.…`) or zone code (`bpzc1.…`).
-        invite: String,
+        /// The invite link (`bpzi1.…`, or the web app's `…#join=bpzi1.…`) or zone code (`bpzc1.…`),
+        /// or `-` to read it from stdin.
+        #[arg(
+            required_unless_present = "invite_file",
+            conflicts_with = "invite_file"
+        )]
+        invite: Option<String>,
+        /// Read the invite from FILE (mode 0600).
+        #[arg(long, value_name = "FILE")]
+        invite_file: Option<PathBuf>,
         /// Ask the zone's admitter to admit this device, signed with the kit key (`--key-file`).
         #[arg(long)]
         kit: bool,
@@ -114,6 +124,7 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
     match cli.command {
         Command::Join {
             invite,
+            invite_file,
             kit: with_kit,
             no_wait,
             timeout,
@@ -122,6 +133,27 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
                 (true, None) => return Err("join --kit needs the kit key: --key-file FILE".into()),
                 (true, Some(k)) => Some(k),
                 (false, _) => None,
+            };
+            let invite = match (invite.as_deref(), invite_file) {
+                (_, Some(path)) => secret::read_invite(&path)?,
+                (Some("-"), None) => {
+                    if cli.key_file.as_deref() == Some(std::path::Path::new("-")) {
+                        return Err(
+                            "the kit key and the invite cannot both come from stdin; use \
+                             --invite-file"
+                                .into(),
+                        );
+                    }
+                    secret::read_invite(std::path::Path::new("-"))?
+                }
+                (Some(code), None) => {
+                    eprintln!(
+                        "zone join: an invite on the command line shows in shell history and \
+                         process listings; use `zone join -` or --invite-file"
+                    );
+                    zeroize::Zeroizing::new(code.to_owned())
+                }
+                (None, None) => unreachable!("clap requires the invite or --invite-file"),
             };
             let outcome = join::run(
                 &state,
