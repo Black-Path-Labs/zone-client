@@ -1,9 +1,11 @@
-//! The state dir: `$XDG_DATA_HOME/zone` (else `~/.local/share/zone`), or `--state DIR`. It holds
-//! the vault key and the SDK's encrypted device store. The dir must be mode 0700 and every file
-//! in it 0600; a wider one is refused, never silently narrowed, because someone else may already
-//! have read it.
+//! The state dir: `$XDG_DATA_HOME/zone` (else `~/.local/share/zone`, on Windows
+//! `%LOCALAPPDATA%\zone`), or `--state DIR`. It holds the vault key and the SDK's encrypted device
+//! store. On Unix the dir must be mode 0700 and every file in it 0600; a wider one is refused,
+//! never silently narrowed, because someone else may already have read it. Windows has no mode
+//! bits: the client relies on the user profile's ACL there and does not check it.
 
 use std::fs::DirBuilder;
+#[cfg(unix)]
 use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
@@ -11,12 +13,14 @@ use std::path::{Path, PathBuf};
 /// 0700 without a window in which it is wider.
 pub fn restrict_umask() {
     // SAFETY: umask only sets the process file mode mask and cannot fail.
+    #[cfg(unix)]
     unsafe {
         libc::umask(0o077);
     }
 }
 
-/// `--state DIR` if given, else `$XDG_DATA_HOME/zone`, else `$HOME/.local/share/zone`.
+/// `--state DIR` if given, else `$XDG_DATA_HOME/zone`, else (Windows) `%LOCALAPPDATA%\zone`, else
+/// `$HOME/.local/share/zone`.
 pub fn resolve(flag: Option<PathBuf>) -> Result<PathBuf, String> {
     if let Some(dir) = flag {
         return Ok(dir);
@@ -24,6 +28,10 @@ pub fn resolve(flag: Option<PathBuf>) -> Result<PathBuf, String> {
     let non_empty = |name: &str| std::env::var_os(name).filter(|v| !v.is_empty());
     if let Some(data) = non_empty("XDG_DATA_HOME") {
         return Ok(PathBuf::from(data).join("zone"));
+    }
+    #[cfg(windows)]
+    if let Some(local) = non_empty("LOCALAPPDATA") {
+        return Ok(PathBuf::from(local).join("zone"));
     }
     if let Some(home) = non_empty("HOME") {
         return Ok(PathBuf::from(home).join(".local/share/zone"));
@@ -33,9 +41,11 @@ pub fn resolve(flag: Option<PathBuf>) -> Result<PathBuf, String> {
 
 /// Make the state dir (0700) if it is missing, then check it.
 pub fn create(dir: &Path) -> Result<(), String> {
-    DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
+    let mut builder = DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    builder.mode(0o700);
+    builder
         .create(dir)
         .map_err(|e| format!("state dir {}: {}", dir.display(), e.kind()))?;
     check(dir)
@@ -66,18 +76,23 @@ fn check_entry(path: &Path, is_dir: bool) -> Result<(), String> {
             path.display()
         ));
     }
-    let mode = meta.permissions().mode() & 0o777;
-    if mode & 0o077 != 0 {
-        let want = if is_dir { "700" } else { "600" };
-        return Err(format!(
-            "{} is open to others (mode {mode:03o}); chmod {want} it",
-            path.display()
-        ));
+    #[cfg(unix)]
+    {
+        let mode = meta.permissions().mode() & 0o777;
+        if mode & 0o077 != 0 {
+            let want = if is_dir { "700" } else { "600" };
+            return Err(format!(
+                "{} is open to others (mode {mode:03o}); chmod {want} it",
+                path.display()
+            ));
+        }
     }
+    #[cfg(not(unix))]
+    let _ = is_dir;
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use std::fs::Permissions;

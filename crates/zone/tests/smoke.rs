@@ -2,6 +2,7 @@
 //! copies from that directory; the release's install.sh is this repo's, and its `zone` is a
 //! stand-in that records how it was called and answers `status` from a file. The real join
 //! against a live Core runs `scripts/smoke.sh` on the released binary.
+#![cfg(unix)]
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;

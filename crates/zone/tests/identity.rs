@@ -1,5 +1,6 @@
 //! The state dir, the kit key's sources, `zone whoami`, and that no subcommand ever
 //! prints key material. The test key is bytes 1..=32, a key nobody uses.
+#![cfg(unix)]
 
 use std::fs::Permissions;
 use std::io::Write;

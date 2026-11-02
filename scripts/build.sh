@@ -1,28 +1,44 @@
 #!/usr/bin/env bash
 # Builds a release `zone` binary for one target with the committed Cargo.lock and writes it to
-# dist/zone-<version>-<target>. Linux targets are musl and fully static: the script fails if the
-# result links anything dynamically. Run it on a maintainer's machine; this repo has no GitHub
-# Actions.
+# dist/zone-<version>-<target> (with .exe for Windows). Linux targets are musl and fully static:
+# the script fails if the result links anything dynamically. macOS binaries link only the
+# system's libraries and are not signed yet. The Windows binary imports only Windows system DLLs.
+# Run it on a maintainer's machine; this repo has no GitHub Actions.
 #
 #   scripts/build.sh x86_64-unknown-linux-musl
 #   scripts/build.sh aarch64-unknown-linux-musl   # needs zig and cargo-zigbuild on PATH
-#   scripts/build.sh all-linux                    # both of the above
+#   scripts/build.sh x86_64-apple-darwin          # zig and cargo-zigbuild too, as are the
+#   scripts/build.sh aarch64-apple-darwin         #   macOS and Windows targets
+#   scripts/build.sh x86_64-pc-windows-gnu
+#   scripts/build.sh all-linux                    # both Linux targets
+#   scripts/build.sh all                          # every target above
 #
 # scripts/cross-toolchain.sh fetches the pinned zig, cargo-zigbuild and qemu-user. With
-# ZONE_QEMU_AARCH64 set (or qemu-aarch64 on PATH) the aarch64 binary must run `zone --version`.
+# ZONE_QEMU_AARCH64 set (or qemu-aarch64 on PATH) the aarch64 binary must run `zone --version`;
+# with ZONE_WINE set to a wine binary, so must the Windows one.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
 target="${1:-}"
 case "${target}" in
   x86_64-unknown-linux-musl | aarch64-unknown-linux-musl) ;;
+  x86_64-apple-darwin | aarch64-apple-darwin | x86_64-pc-windows-gnu) ;;
   all-linux)
     "$0" x86_64-unknown-linux-musl
     "$0" aarch64-unknown-linux-musl
     exit 0
     ;;
+  all)
+    "$0" all-linux
+    "$0" x86_64-apple-darwin
+    "$0" aarch64-apple-darwin
+    "$0" x86_64-pc-windows-gnu
+    exit 0
+    ;;
   *)
-    echo "usage: scripts/build.sh x86_64-unknown-linux-musl|aarch64-unknown-linux-musl|all-linux" >&2
+    echo "usage: scripts/build.sh <target>|all-linux|all; targets: x86_64-unknown-linux-musl," >&2
+    echo "  aarch64-unknown-linux-musl, x86_64-apple-darwin, aarch64-apple-darwin," >&2
+    echo "  x86_64-pc-windows-gnu" >&2
     exit 2
     ;;
 esac
@@ -33,7 +49,7 @@ if [ ! -d "$(rustc --print sysroot)/lib/rustlib/${target}" ]; then
 fi
 
 host="$(rustc -vV | sed -n 's/^host: //p')"
-if [ "${target%%-*}" = "${host%%-*}" ]; then
+if [ "${target}" = "${host%%-*}-unknown-linux-musl" ]; then
   # ring compiles C for the target. musl-gcc is used when present; otherwise the host gcc builds
   # those objects and the Rust toolchain's self-contained musl links them.
   cc_var="CC_${target//-/_}"
@@ -42,7 +58,7 @@ if [ "${target%%-*}" = "${host%%-*}" ]; then
   fi
   build=(cargo build)
 else
-  # Another architecture: zig compiles ring's C and links, through cargo-zigbuild.
+  # Another architecture or OS: zig compiles ring's C and links, through cargo-zigbuild.
   for tool in zig cargo-zigbuild; do
     if ! command -v "${tool}" >/dev/null; then
       echo "build: ${tool} is not on PATH; see scripts/cross-toolchain.sh" >&2
@@ -64,17 +80,50 @@ export RUSTFLAGS="${RUSTFLAGS:+${RUSTFLAGS} }${remap}"
 
 "${build[@]}" --release --locked --target "${target}" --bin zone
 
-bin="${target_dir}/${target}/release/zone"
+exe=
+if [ "${target}" = x86_64-pc-windows-gnu ]; then
+  exe=.exe
+fi
+bin="${target_dir}/${target}/release/zone${exe}"
 kind="$(file -b "${bin}")"
-if ! grep -Eq 'static(-pie|ally) linked' <<<"${kind}"; then
-  echo "build: ${bin} is not statically linked: ${kind}" >&2
-  exit 1
-fi
-libs="$(ldd "${bin}" 2>&1 || true)"
-if ! grep -Eq 'not a dynamic|statically linked' <<<"${libs}"; then
-  echo "build: ldd lists libraries for ${bin}" >&2
-  exit 1
-fi
+case "${target}" in
+  *-linux-musl)
+    if ! grep -Eq 'static(-pie|ally) linked' <<<"${kind}"; then
+      echo "build: ${bin} is not statically linked: ${kind}" >&2
+      exit 1
+    fi
+    libs="$(ldd "${bin}" 2>&1 || true)"
+    if ! grep -Eq 'not a dynamic|statically linked' <<<"${libs}"; then
+      echo "build: ldd lists libraries for ${bin}" >&2
+      exit 1
+    fi
+    ;;
+  *-apple-darwin)
+    grep -q '^Mach-O 64-bit' <<<"${kind}" || {
+      echo "build: ${bin} is not a 64-bit Mach-O: ${kind}" >&2
+      exit 1
+    }
+    # Load commands name every dylib the binary needs; anything outside the OS is refused.
+    dylibs="$(strings -a "${bin}" | grep -E '^/.*\.dylib$' | sort -u)"
+    if grep -Ev '^/usr/lib/|^/System/Library/' <<<"${dylibs}" | grep -q .; then
+      echo "build: ${bin} links a non-system dylib: ${dylibs}" >&2
+      exit 1
+    fi
+    ;;
+  *-windows-gnu)
+    grep -q '^PE32+ executable' <<<"${kind}" || {
+      echo "build: ${bin} is not a PE32+ executable: ${kind}" >&2
+      exit 1
+    }
+    # The MinGW runtime must be linked in: a user has no libgcc_s or libwinpthread DLL.
+    dlls="$(objdump -p "${bin}" | sed -n 's/^\s*DLL Name: //p' | sort -fu)"
+    if grep -Eiv '^(kernel32|ntdll|advapi32|bcrypt|bcryptprimitives|ws2_32|userenv|msvcrt|ucrtbase|shell32|ole32|crypt32|secur32|api-ms-win-[a-z0-9-]+)\.dll$' \
+      <<<"${dlls}" | grep -q .; then
+      echo "build: ${bin} imports a non-system DLL: ${dlls//$'\n'/ }" >&2
+      exit 1
+    fi
+    ;;
+esac
 
 if [ "${target}" = aarch64-unknown-linux-musl ]; then
   qemu="${ZONE_QEMU_AARCH64:-$(command -v qemu-aarch64 || true)}"
@@ -86,9 +135,16 @@ if [ "${target}" = aarch64-unknown-linux-musl ]; then
     echo "build: no qemu-aarch64; ${bin} was not run" >&2
   fi
 fi
+if [ "${target}" = x86_64-pc-windows-gnu ]; then
+  if [ -n "${ZONE_WINE:-}" ]; then
+    "${ZONE_WINE}" "${bin}" --version
+  else
+    echo "build: no ZONE_WINE; ${bin} was not run" >&2
+  fi
+fi
 
 version="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)"
 mkdir -p dist
-out="dist/zone-${version}-${target}"
+out="dist/zone-${version}-${target}${exe}"
 cp "${bin}" "${out}"
 echo "build: ${out} ($(stat -c %s "${out}") bytes)"

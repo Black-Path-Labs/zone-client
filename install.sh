@@ -24,6 +24,7 @@ fail() {
 
 case "$(uname -s)" in
   Linux) os=unknown-linux-musl ;;
+  Darwin) os=apple-darwin ;;
   *) fail "no release for $(uname -s) yet; build from source: https://github.com/${repo}" ;;
 esac
 case "$(uname -m)" in
