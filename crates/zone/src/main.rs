@@ -18,6 +18,7 @@ mod secret;
 mod state;
 mod transport;
 mod vault;
+mod view;
 
 /// `zone join`: the SDK or Core refused; stderr names the reason kind.
 const EXIT_REFUSED: u8 = 3;
@@ -80,6 +81,20 @@ enum Command {
     /// Print this device's zone state as JSON: zone, pseudonym, admitted or pending, members,
     /// last and next sync, last failure kind. Reads local state only.
     Status,
+    /// Print the zone's members as JSON: pseudonym, name, kind (human, agent, ...), admin, devices
+    /// and the capabilities each offers, with whether each is online. Reads the roster this
+    /// device last synced; `--sync` syncs once first.
+    Members {
+        #[arg(long)]
+        sync: bool,
+    },
+    /// Print the zone's admission grants as JSON: places, used and left, expiry, the kinds and
+    /// scope each admits, whether revoked, and the per-agent caps (AORs, rooms, lines, admissions
+    /// per day; null when the owner set none). Reads the last synced roster; `--sync` syncs first.
+    Grants {
+        #[arg(long)]
+        sync: bool,
+    },
     /// Keep the joined zone synced until SIGINT or SIGTERM.
     Run {
         /// Stop after N syncs.
@@ -209,6 +224,14 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
         }
         Command::Status => {
             status(&state)?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Members { sync } => {
+            println!("{}", view::members(&state, sync)?);
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Grants { sync } => {
+            println!("{}", view::grants(&state, sync)?);
             Ok(ExitCode::SUCCESS)
         }
         Command::Run { rounds } => {

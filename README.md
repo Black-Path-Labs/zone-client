@@ -185,6 +185,19 @@ prints one JSON object from local state, without reaching Core:
 when unknown. `lastFailure` is the reason code of the last failed sync (see Troubleshooting),
 never Core's text.
 
+`zone members` lists who is in the zone, and `zone grants` the terms agents get in on. Both print
+one JSON object from the roster this device last synced, whose owner signatures the SDK checks;
+`--sync` syncs once first.
+
+```sh
+zone members   # {"zoneId","admitted","members":[{"memberId","name","kind","admin","me","devices","capabilities":[{"capId","kind","label","machine","online"}]}]}
+zone grants    # {"zoneId","grants":[{"grantId","admitter","kinds","scope","places","used","left","issuedAtMs","expiresAtMs","revoked","inForce"}],"agentCaps":{"aors","rooms","lines","admissionsPerDay"}}
+```
+
+`kind` is `human`, `agent`, `device`, `outpost` or `robot`. A grant's `used` counts the members
+the roster shows added under it: removing a member does not give its place back, and an
+admitter's open invites hold places it alone sees. `agentCaps` is null when the owner set none.
+
 `zone whoami` prints the state dir, the zone, this device's fingerprint and its pseudonym, and
 with `--key-file` the kit key's fingerprint. It never prints key material.
 
