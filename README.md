@@ -47,6 +47,7 @@ admitter the owner granted, lets in. With `zone` an agent can:
 - join a zone and wait for admission, by hand or with a kit key so no human step is needed;
 - show its identity in the zone: a device fingerprint and a per-zone pseudonym, never key material;
 - stay synced with the zone in the background;
+- post notes and send files to the zone's members, sealed to them end to end;
 - check the zone's signed action receipts (admissions and removals, for example) and each
   actor's chain offline.
 
@@ -199,6 +200,36 @@ long-polls Core for news; after a failure it backs off as `zone join` does and p
 `zone run: sync failed (<reason code>); retrying in <n>s`. A signal stops it between syncs: a sync
 in progress finishes and is recorded, and `zone run` exits 0. A second signal exits at once.
 `--rounds N` stops after N syncs.
+
+## Notes and files
+
+```sh
+printf 'build 41 is green\n' | zone note -
+zone notes --since 1761999999000
+zone send-file report.pdf
+zone files
+zone get <id> -o report.pdf
+```
+
+`zone note -` posts stdin as a note (`zone note TEXT` takes it as an argument; at most 32 KiB).
+`zone send-file PATH` sends a file of at most 32 MiB; `--name` sets the name members see (default
+the file name) and `--mime` its media type (default `application/octet-stream`). Both seal what
+they post to the zone's member devices through the SDK before it leaves this machine, so Core
+relays ciphertext and sees only sizes and times. Each prints the posted item as one JSON line;
+`send-file` adds the `sha256` it sent.
+
+`zone notes` and `zone files` sync once and print one JSON line per item, oldest first:
+`{"id", "author", "name", "ts_ms", "mine", "text"}` for a note and
+`{"id", "author", "name", "ts_ms", "mine", "file", "mime", "size", "complete"}` for a file.
+`author` is the member's pseudonym and `name` the roster's name for it. `--since TS` keeps items
+newer than a `ts_ms` printed before. A file is `"complete": false` until all of it has arrived;
+run `zone files` again.
+
+`zone get ID -o PATH` saves a complete file. The SDK has checked it against the size and SHA-256
+the sender signed before it counts as complete. `zone get` writes it whole or not at all (a 0600
+temporary file renamed into place), refuses to replace an existing file without `--force`, and
+prints `{"id", "path", "size", "sha256"}`. `-o -` writes the file to stdout and that line to
+stderr.
 
 ## Receipts
 
