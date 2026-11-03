@@ -10,6 +10,7 @@ use clap::{Parser, Subcommand};
 mod backoff;
 mod device;
 mod join;
+mod mcp;
 mod receipts;
 mod record;
 mod run;
@@ -92,6 +93,26 @@ enum Command {
     },
     /// Show this device's identity: fingerprints and pseudonym, never key material.
     Whoami,
+    /// Serve MCP on stdio, bridged to a hosted zone MCP server (`zone mcp login URL` first).
+    Mcp {
+        #[command(subcommand)]
+        command: Option<McpCommand>,
+    },
+}
+
+#[derive(Subcommand)]
+enum McpCommand {
+    /// Connect to the hosted zone MCP endpoint at URL (`https://…/mcp`): the zone owner opens the
+    /// printed link in a browser on this machine and allows a zone.
+    Login {
+        url: String,
+        /// Take the browser's redirect on this loopback port (default: any free one).
+        #[arg(long, value_name = "PORT")]
+        port: Option<u16>,
+        /// Stop waiting for the consent after SECS.
+        #[arg(long, value_name = "SECS", default_value_t = 900)]
+        timeout: u64,
+    },
 }
 
 #[derive(Subcommand)]
@@ -205,6 +226,16 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
         }
         Command::Whoami => {
             whoami(&state, kit.as_ref())?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Mcp { command: None } => {
+            mcp::serve(&state)?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Mcp {
+            command: Some(McpCommand::Login { url, port, timeout }),
+        } => {
+            mcp::login(&state, &url, port, std::time::Duration::from_secs(timeout))?;
             Ok(ExitCode::SUCCESS)
         }
     }

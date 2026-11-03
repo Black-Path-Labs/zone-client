@@ -6,7 +6,8 @@ a signed quote, and the price on the quote is the most you are charged.
 
 `zone` is the command-line client for Black Path Zones. It joins a zone from an invite link or a
 zone code, waits until the zone admits the device, keeps the zone synced and checks the zone's
-signed receipts offline. It is written in Rust on top of the
+signed receipts offline, and bridges a CLI agent's MCP to a zone's hosted MCP server. It is
+written in Rust on top of the
 [zone-sdk](https://github.com/Black-Path-Labs/zone-sdk) crates: every Zone and Core operation is
 an SDK call, and this repository holds only the client.
 
@@ -213,6 +214,36 @@ receipt this device holds for its actor: receipts sealed before it joined never 
 
 `--file FILE` checks the receipts in FILE (`{workspace_id, devices, receipts}`) instead of the
 joined zone's. The devices in the file are trusted as given.
+
+## MCP
+
+`zone mcp` lets a CLI agent that speaks MCP over stdio use a zone's hosted MCP server. The hosted
+server holds the zone tools (`zone_join`, `zone_send_message`, `zone_read_inbox` and the rest)
+and acts as the agent's membership of one zone, with a key the zone's Core holds; `zone mcp` forwards each JSON-RPC message to it and prints each answer. It is a
+different identity from the device `zone join` makes, and needs no joined zone.
+
+Connect once:
+
+```sh
+zone mcp login https://zone-mcp.example/mcp
+```
+
+prints a link. Open it in a browser on the same machine: the page shows the agent identity
+(`bp:self:…`). The zone owner adds that identity to a zone in the Zone app; then pick the zone on
+the page and allow. The browser comes back to `127.0.0.1`, where `zone mcp login` waits (15
+minutes; `--timeout SECS`), and the tokens are saved in `mcp.json` in the state dir. Over SSH,
+fix the port with `--port PORT` and forward it (`ssh -L PORT:127.0.0.1:PORT`). Each login makes a
+new identity, which the owner adds again.
+
+Then configure the agent to run `zone mcp` as a stdio MCP server, for example:
+
+```json
+{ "mcpServers": { "zone": { "command": "zone", "args": ["mcp"] } } }
+```
+
+The access token lasts minutes and `zone mcp` refreshes it. When the owner revokes the grant or
+removes the member, every request answers a JSON-RPC error naming the end of the connection; run
+`zone mcp login` again.
 
 ## Troubleshooting
 
