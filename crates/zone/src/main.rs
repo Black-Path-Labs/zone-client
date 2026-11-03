@@ -51,11 +51,13 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     /// Join a zone with an invite link, a zone code or a join address, and wait until admitted.
-    /// Pass an invite on stdin (`zone join -`) or in a file (`--invite-file`): an argument shows
-    /// in shell history and process listings. A join address is not secret.
+    /// Pass the invite, zone code or join address on stdin (`zone join -`) or in a file
+    /// (`--invite-file`), never as an argument: an argument shows in shell history and process
+    /// listings. A join address is a secret: anyone who has it and a kit key can join.
     Join {
         /// The invite link (`bpzi1.…`, or the web app's `…#join=bpzi1.…`), zone code (`bpzc1.…`)
-        /// or join address (`za_…`), or `-` to read it from stdin.
+        /// or join address (`za_…`), or `-` to read it from stdin. Given here it works but draws
+        /// a warning.
         #[arg(
             required_unless_present = "invite_file",
             conflicts_with = "invite_file"
@@ -172,9 +174,6 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
                         );
                     }
                     secret::read_invite(std::path::Path::new("-"))?
-                }
-                (Some(code), None) if bp_workspace_core::space::is_join_address(code.trim()) => {
-                    zeroize::Zeroizing::new(code.to_owned())
                 }
                 (Some(code), None) => {
                     eprintln!(
