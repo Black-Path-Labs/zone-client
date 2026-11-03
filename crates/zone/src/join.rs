@@ -11,8 +11,16 @@
 //! `--core` and refuses a code that does not hash to the address, then the join goes on as for
 //! that zone code. With `--kit` that is the whole self-service join: no invite and no owner step.
 //!
-//! Every step is an SDK call. Running `zone join` again with the same code resumes the wait.
-//! Each sync is noted for `zone status` (record.rs).
+//! Waiting is a long-poll, as in `zone run`: each sync asks Core to hold the mailbox read until
+//! something is posted. A Core that lets a device with an unanswered kit request wait that way
+//! answers the moment the admitter's roster makes it a member. A Core that answers at once (an
+//! older one, or no kit request) is polled every `FAST_POLL` for `FAST_WINDOW` after a kit
+//! request, since an admitter that is online answers within about a second; after that, and for
+//! a join that waits for a person, the waiting backoff decides.
+//!
+//! Every step is an SDK call. Running `zone join` again with the same code resumes the wait: it
+//! syncs first, so a device admitted meanwhile is done without asking again. Each sync is noted
+//! for `zone status` (record.rs). `-v` times each step (transport.rs).
 
 use std::path::Path;
 use std::sync::Arc;
@@ -27,10 +35,17 @@ use crate::backoff::{self, Backoff};
 use crate::device;
 use crate::record::SyncRecord;
 use crate::secret::KitKey;
-use crate::transport::Http;
+use crate::transport::{trace, Http};
 
 /// The member kind a kit request asks for.
 pub const KIND: &str = "agent";
+/// How long one waiting sync asks Core to hold the mailbox read. Core caps it at 25 s.
+const LONG_POLL_SECS: u64 = 20;
+/// A sync that came back sooner than this was not held: Core does not long-poll this device yet.
+const HELD: Duration = Duration::from_secs(1);
+/// After a kit request, while Core answers at once, how often to look and for how long.
+const FAST_POLL: Duration = Duration::from_millis(250);
+const FAST_WINDOW: Duration = Duration::from_secs(15);
 
 /// How `zone join` ended, for its exit code.
 pub enum Outcome {
@@ -94,6 +109,8 @@ fn bare_code(input: &str) -> &str {
 }
 
 pub fn run(state: &Path, opts: Options<'_>) -> Result<Outcome, String> {
+    // One transport for the whole join, so every call after the first reuses its connection.
+    let http = Arc::new(Http::default());
     let mut code = bare_code(opts.code);
     let resolved;
     if is_join_address(code) {
@@ -101,7 +118,7 @@ pub fn run(state: &Path, opts: Options<'_>) -> Result<Outcome, String> {
         match bp_zone_core::resolve_join_address(
             opts.core.to_owned(),
             code.to_owned(),
-            Arc::new(Http::default()),
+            http.clone(),
         ) {
             Ok(c) => resolved = c,
             Err(e) if transient(&kind(&e)) => return Err(e.to_string()),
@@ -117,21 +134,29 @@ pub fn run(state: &Path, opts: Options<'_>) -> Result<Outcome, String> {
     }
     .map_err(|_| "not a zone code or invite link".to_owned())?;
 
-    let device = device::open_or_create(
-        state,
-        &zone.core_url,
-        &zone.core_zone,
-        Arc::new(Http::default()),
-    )?;
+    let device = device::open_or_create(state, &zone.core_url, &zone.core_zone, http)?;
+    let resuming = device.status().zone_id.as_deref() == Some(zone.workspace_id.as_str());
     // An invite is redeemed here; a spent, expired or unknown one is Core's 404, a refusal.
     match device.join(code.to_owned()) {
         Ok(()) => {}
         Err(e) if transient(&kind(&e)) => return Err(e.to_string()),
         Err(e) => return Ok(refused(&e)),
     }
+    trace("joined");
     let zone_id = device.status().zone_id.unwrap_or_default();
     if device.status().admitted {
         return admitted(&device, &zone_id);
+    }
+    let mut record = SyncRecord::load(state);
+    // A resumed wait: the admitter may have let this device in since. Look before asking again,
+    // or the admitter refuses the new request as from a member.
+    if resuming {
+        let synced = device.sync(0);
+        record.synced(synced.as_ref().map(|_| ()));
+        record.save(state)?;
+        if synced.is_ok() && device.status().admitted {
+            return admitted(&device, &zone_id);
+        }
     }
     if in_person && opts.kit.is_none() {
         let join_code = device.join_code().map_err(|e| e.to_string())?;
@@ -143,13 +168,17 @@ pub fn run(state: &Path, opts: Options<'_>) -> Result<Outcome, String> {
     let mut backoff = Backoff::default();
     let mut request_backoff = Backoff::default();
     let mut request_due = opts.kit.is_some().then_some(Instant::now());
-    let mut record = SyncRecord::load(state);
+    // When the last kit request went through: polled fast for FAST_WINDOW after it.
+    let mut asked: Option<Instant> = None;
+    // The last sync read the mailbox (Core counts this device a member) and was not held.
+    let mut read_at_once = false;
     loop {
         if let (Some(kit), Some(due)) = (opts.kit, request_due) {
             if Instant::now() >= due {
                 match device.request_admission(kit.seed(), KIND) {
                     Ok(()) => {
                         request_backoff.succeeded();
+                        asked = Some(Instant::now());
                         eprintln!("zone join: asked the zone's admitter to admit this device");
                         request_due =
                             Some(Instant::now() + Duration::from_millis(MAX_REQUEST_AGE_MS));
@@ -172,15 +201,32 @@ pub fn run(state: &Path, opts: Options<'_>) -> Result<Outcome, String> {
             return Ok(Outcome::Done);
         }
 
-        let synced = device.sync(0);
+        // Hold the read no longer than the time left.
+        let left = opts.timeout.map_or(LONG_POLL_SECS, |t| {
+            t.saturating_sub(started.elapsed()).as_secs()
+        });
+        let polled = Instant::now();
+        let synced = device.sync(left.min(LONG_POLL_SECS) as u32);
+        let held = polled.elapsed() >= HELD;
         record.synced(synced.as_ref().map(|_| ()));
         record.save(state)?;
-        let wait = match synced {
+        let fast = asked.is_some_and(|a| a.elapsed() < FAST_WINDOW);
+        let was_read_at_once = read_at_once;
+        read_at_once = synced.is_ok() && !held;
+        let wait = match &synced {
             Ok(_) if device.status().admitted => return admitted(&device, &zone_id),
-            // Synced but not on the roster yet: waiting, like Core's not-admitted.
+            // Core held the read and nothing came for this device: look again at once. A read
+            // that was not held moved the cursor past what was there (a member at Core whose
+            // roster is not posted yet), so the next one is held: also at once, but only once.
+            Ok(_) if held || !was_read_at_once => Duration::ZERO,
+            Err(e) if held && backoff::is_waiting(&kind(e)) => Duration::ZERO,
+            // Not on the roster yet and Core does not hold the read: soon after a kit request
+            // look again shortly, otherwise back off as for Core's not-admitted.
+            Ok(_) if fast => FAST_POLL,
             Ok(_) => backoff.failed("not-admitted", OsRng.next_u64()),
-            Err(e) if retryable(&kind(&e)) => backoff.failed(&kind(&e), OsRng.next_u64()),
-            Err(e) => return Ok(refused(&e)),
+            Err(e) if fast && backoff::is_waiting(&kind(e)) => FAST_POLL,
+            Err(e) if retryable(&kind(e)) => backoff.failed(&kind(e), OsRng.next_u64()),
+            Err(e) => return Ok(refused(e)),
         };
         // Wake for whichever comes first: the next sync or the next kit request.
         let mut until = Instant::now() + wait;

@@ -44,6 +44,9 @@ struct Cli {
     /// Read the kit key from FILE (mode 0600), or from stdin with `-`. Never from argv or env.
     #[arg(long, global = true, value_name = "FILE")]
     key_file: Option<PathBuf>,
+    /// Time each step and each Core exchange on stderr (the route only: no id, header or body).
+    #[arg(short, long, global = true)]
+    verbose: bool,
     #[command(subcommand)]
     command: Command,
 }
@@ -130,6 +133,7 @@ enum ReceiptsCommand {
 fn main() -> ExitCode {
     state::restrict_umask();
     let cli = Cli::parse();
+    transport::set_verbose(cli.verbose);
     match run(cli) {
         Ok(code) => code,
         Err(e) => {
