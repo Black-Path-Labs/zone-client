@@ -2223,5 +2223,6 @@ dependencies = [
  "serde_json",
  "tempfile",
  "ureq",
+ "url",
  "zeroize",
 ]

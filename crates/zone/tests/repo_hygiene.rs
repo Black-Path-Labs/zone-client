@@ -90,12 +90,24 @@ fn no_protocol_code_in_src() {
     .iter()
     .map(|p| p.concat())
     .collect();
+    // `zone mcp` bridges MCP Streamable HTTP and its OAuth (standards the zone protocol
+    // is not, and the SDK does not hold) to a hosted server, so mcp.rs alone may name an HTTP
+    // method and the bearer scheme. Every other pattern still holds there: no Core route, no
+    // zone header, no signing or sealing.
+    let mcp_only: Vec<String> = [["bear", "er"], ["\"GE", "T\""]]
+        .iter()
+        .map(|p| p.concat())
+        .collect();
     let mut all = Vec::new();
     files(&repo_root().join("crates/zone/src"), &mut all);
     let mut hits = Vec::new();
     for path in &all {
         let text = fs::read_to_string(path).unwrap().to_lowercase();
+        let is_mcp = path.file_name().is_some_and(|n| n == "mcp.rs");
         for p in &patterns {
+            if is_mcp && mcp_only.contains(p) {
+                continue;
+            }
             if text.contains(&p.to_lowercase()) {
                 hits.push(format!("{}: {p}", path.display()));
             }
