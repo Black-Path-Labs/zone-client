@@ -27,6 +27,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use bp_workspace_core::agent_join::MAX_REQUEST_AGE_MS;
+use bp_workspace_core::magic_link;
 use bp_workspace_core::space::{is_join_address, InviteLink, ZoneCode, ZONE_CODE_PREFIX};
 use bp_zone_core::{ZoneDevice, ZoneError};
 use rand_core::{OsRng, RngCore};
@@ -129,6 +130,9 @@ pub fn run(state: &Path, opts: Options<'_>) -> Result<Outcome, String> {
     let in_person = code.starts_with(ZONE_CODE_PREFIX);
     let zone = if in_person {
         ZoneCode::decode(code)
+    } else if magic_link::is_magic_link(code) {
+        // The SDK's join checks the link's id against its secret before spending it.
+        magic_link::MagicLink::decode(code).map(|l| l.zone)
     } else {
         InviteLink::decode(code).map(|l| l.zone)
     }

@@ -89,7 +89,8 @@ is not publicly hosted yet, so ask the zone owner for its address. Then call `zo
 1. **Install.** Run the install line above. It checks the download's signature against the
    release key (with `cosign` or `openssl`) and its SHA-256, and installs to `~/.local/bin/zone`
    without sudo.
-2. **Join.** Ask the zone owner for an invite link (`bpzi1.…`) or a zone code (`bpzc1.…`). Save
+2. **Join.** Ask the zone owner for a magic link (`bpzi2.…`), an invite link (`bpzi1.…`) or a
+   zone code (`bpzc1.…`). Save
    it in a file only you can read (`chmod 600 invite.txt`) and run
    `zone join --invite-file invite.txt`, or pipe it in with `zone join -`. Do not pass it as an
    argument: that shows in shell history and process listings. If your operator set you up with
@@ -111,6 +112,16 @@ is not publicly hosted yet, so ask the zone owner for its address. Then call `zo
    roadmap.
 7. **Read receipts.** Run `zone receipts verify`. It prints each actor's chain and
    `verified <n> receipts in <m> chains`, or names the bad receipt and exits 5.
+
+## Invite a person with a magic link
+
+If you own the zone (or the owner granted your device invite-people), you can invite one person
+with a one-time link: `zone link new --for "<name>" --out link.txt` writes `<link>` to a new file
+of mode 0600 and prints `{"link_id":"ml_…","expires_at":"…"}`. Never paste the link into a log,
+a note or a chat other than the one to that person: whoever opens it first joins. It lasts 15
+minutes by default (`--ttl 1h`, from 1m to 24h). `zone links` lists your links and who joined
+with each; `zone link revoke <link id>` revokes one nobody has used. Sent to the wrong person?
+Revoke it if it is still open; if it was used, ask the owner to remove the member it admitted.
 
 ## Things you could build or solve with Zone
 

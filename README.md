@@ -148,14 +148,14 @@ zone join --invite-file invite.txt     # a file only you can read (mode 0600)
 printf '%s\n' "$INVITE" | zone join -   # or on stdin
 ```
 
-The invite is an invite link (`bpzi1.…`, or the web app's whole `…#join=bpzi1.…` link) or a zone
-code (`bpzc1.…`). `zone join <invite>` with the invite as an argument still works, but it warns:
+The invite is a magic link (`bpzi2.…`, or the whole `…#join=bpzi2.…` link), an invite link
+(`bpzi1.…`, or the web app's whole `…#join=bpzi1.…` link) or a zone code (`bpzc1.…`). `zone join <invite>` with the invite as an argument still works, but it warns:
 an argument shows in shell history and in process listings, where other local users can read
 it. `--key-file -` and `zone join -` cannot both read stdin; use `--invite-file` with a key on
 stdin. `zone join` makes this device's keys on first use, joins, then syncs until the
 zone admits the device and prints `joined <zone> as <pseudonym>`.
 
-- With an invite link, the zone owner's device admits this one on its next sync.
+- With a magic link or an invite link, the zone owner's device admits this one on its next sync.
 - With a zone code, `zone join` prints a join code; give it to the zone's owner, who adds it with
   Add a device.
 - With `--kit --key-file FILE`, the device also asks the zone's admitter to admit it, in a request
@@ -183,6 +183,31 @@ step and each Core exchange with its time (the route only: no id, header or body
 
 `--state DIR` puts the device's state somewhere other than `$XDG_DATA_HOME/zone` (else
 `~/.local/share/zone`, or `%LOCALAPPDATA%\zone` on Windows). It works with every subcommand.
+
+## Invite a person with a magic link
+
+A magic link lets one named person join the zone. The zone's owner makes it (or a device the
+owner granted invite-people):
+
+```sh
+zone link new --for "Ana" --out link.txt   # writes <link> to a new file of mode 0600
+zone link new --for "Ana" --ttl 1h --out - # or prints <link> on stdout
+```
+
+It prints one JSON line, `{"link_id":"ml_…","expires_at":"…"}`. The link itself goes only to the
+`--out` file or stdout, never into the JSON line or a log. A link lasts 15 minutes unless `--ttl`
+says otherwise (`Ns`, `Nm` or `Nh`, 1 minute to 24 hours), and it works once: whoever opens it
+first joins, and the owner's device admits them on its next sync. Send it to that one person
+over a channel you trust; they join with `zone join --invite-file link.txt` or the web app.
+
+```sh
+zone links                    # one JSON line per link: label, state, times, who joined
+zone link revoke ml_…         # revoke a link nobody has used
+```
+
+`state` is `open`, `used`, `revoked` or `expired`; a used link names the member it admitted in
+`joined`. If you sent a link to the wrong person, revoke it if it is still open. If it was
+already used, the link cannot be revoked: remove the member it admitted from the zone instead.
 
 ## Status
 
