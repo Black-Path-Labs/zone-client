@@ -272,6 +272,32 @@ comes with the next sync, and every reconnect syncs once. The push carries the s
 the zone service keeps: the edge sees the zone's address, sizes and timing, never text or
 recipients. `--no-live` turns it off even when `ZONE_SIP_WS` is set.
 
+## Quick lookups
+
+```sh
+zone who                      # who is online now
+zone whois aly                # one member: kind, devices online, capabilities
+zone caps                     # the zone's capabilities as last synced
+zone price inference          # what a capability costs (one read from the zone service)
+zone receipts list            # the latest receipts this device opened
+zone me                       # this device and member
+zone slash "/help"            # any slash command line
+```
+
+Each prints one JSON object. They answer from what this device already holds and never sync:
+`who`, `whois`, `caps`, `receipts list`, `me` and `/help` read local state; `price` and `/links`
+(the same list as `zone links`) make the zone service's one read (a challenge and the signed
+request). While `zone run` holds the live session on the same state dir, each asks it over
+`live.sock` instead, and `zone who` is live: the session publishes this device's presence and
+subscribes to the zone's, signed by each device and checked against the roster here (the edge sees
+a device fingerprint and a time, which the registration already shows it). Without a running
+`zone run`, presence is unknown and `zone who` says so (`"presence": "no-live-session"`). `-v` shows
+how long each took.
+
+A note that starts with `/` is a command: `zone note "/whois aly"` answers it here and posts
+nothing. Start a note with `//` to post a leading slash (`zone note "//shrug"` posts `/shrug`).
+`zone mcp` offers the same commands as local tools (`zone_who`, `zone_whois`, … `zone_help`).
+
 ## Notes and files
 
 ```sh
@@ -472,6 +498,12 @@ Then configure the agent to run `zone mcp` as a stdio MCP server, for example:
 ```json
 { "mcpServers": { "zone": { "command": "zone", "args": ["mcp"] } } }
 ```
+
+When the state dir also holds a joined zone, `zone mcp` adds the slash commands as local tools
+(`zone_who`, `zone_whois`, `zone_caps`, `zone_price`, `zone_receipts`, `zone_links`, `zone_me`,
+`zone_help`; see Quick lookups). They answer as this machine's device, not the hosted identity,
+and never reach the hosted server. With a joined zone and no `zone mcp login`, `zone mcp` serves
+them alone.
 
 The access token lasts minutes and `zone mcp` refreshes it. When the owner revokes the grant or
 removes the member, every request answers a JSON-RPC error naming the end of the connection; run

@@ -19,6 +19,7 @@ mod record;
 mod room;
 mod run;
 mod secret;
+mod slash;
 mod state;
 mod stream;
 mod transport;
@@ -218,6 +219,27 @@ enum Command {
     /// Print the zone's magic links as JSON lines: id, label, state (open, used, revoked or
     /// expired), times, and the member a used link admitted.
     Links,
+    /// Who in the zone is online now (`/who`), from the live session `zone run` holds; without
+    /// one, presence is unknown. Reads local state only.
+    Who,
+    /// One member (`/whois`): kind, devices and whether each is online, capabilities. MEMBER is
+    /// a pseudonym, a pseudonym prefix of 6 or more characters, or a name or its start.
+    Whois {
+        #[arg(required = true, num_args = 1..)]
+        member: Vec<String>,
+    },
+    /// The zone's capabilities as last synced (`/caps`).
+    Caps,
+    /// What a capability costs (`/price`): one Core read, by kind, id or tag.
+    Price {
+        #[arg(required = true, num_args = 1..)]
+        capability: Vec<String>,
+    },
+    /// This device and member (`/me`): pseudonym, name, fingerprint, admitted, online.
+    Me,
+    /// Run any slash command line (`zone slash "/whois Aly"`), as the composer would. `/help`
+    /// lists them.
+    Slash { line: String },
     /// Serve MCP on stdio, bridged to a hosted zone MCP server (`zone mcp login URL` first).
     Mcp {
         #[command(subcommand)]
@@ -366,6 +388,8 @@ enum LinkCommand {
 
 #[derive(Subcommand)]
 enum ReceiptsCommand {
+    /// The latest receipts this device opened, with their count (`/receipts`). Local only.
+    List,
     /// Verify the zone's signed action receipts and each actor's chain, offline. Exit 5 names the
     /// actor and seq of each receipt that is bad, dropped, repeated or out of order.
     Verify {
@@ -468,6 +492,36 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
         }
         Command::Run { rounds, live } => {
             run::run(&state, rounds, live)?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Receipts {
+            command: ReceiptsCommand::List,
+        } => {
+            slash::run(&state, "/receipts")?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Who => {
+            slash::run(&state, "/who")?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Whois { member } => {
+            slash::run(&state, &format!("/whois {}", member.join(" ")))?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Caps => {
+            slash::run(&state, "/caps")?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Price { capability } => {
+            slash::run(&state, &format!("/price {}", capability.join(" ")))?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Me => {
+            slash::run(&state, "/me")?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Slash { line } => {
+            slash::run(&state, &line)?;
             Ok(ExitCode::SUCCESS)
         }
         Command::Receipts {

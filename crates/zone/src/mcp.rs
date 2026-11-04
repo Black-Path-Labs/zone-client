@@ -10,6 +10,12 @@
 //! screen shows to a zone, and allows it. Tokens live in `<state>/mcp.json` (0600); the refresh
 //! token rotates on every use, so each new one is saved before it is used. Nothing here prints a
 //! token.
+//!
+//! The slash commands (`zone who` and the rest, slash.rs) are local tools here, `zone_who`,
+//! `zone_whois`, … `zone_help`, answered from this machine's joined zone device (and the presence
+//! a running `zone run` holds), never by the hosted server: it is custodial and cannot open the
+//! sealed roster. They join the hosted server's `tools/list`; with a joined device and no
+//! `zone mcp login`, they are served alone.
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -21,8 +27,10 @@ use rand_core::{OsRng, RngCore};
 use serde_json::{json, Value};
 use url::Url;
 
+use bp_zone_core::commands;
+
 use crate::record::now_ms;
-use crate::state;
+use crate::{device, slash, state};
 
 /// Refresh an access token this close to its end rather than send it.
 const REFRESH_MARGIN_MS: u64 = 30_000;
@@ -628,6 +636,110 @@ impl Bridge {
     }
 }
 
+/// The local slash-command tools, one per command in the SDK's registry.
+fn local_tools() -> Vec<Value> {
+    commands::COMMANDS
+        .iter()
+        .map(|c| {
+            let (props, required) = match c.name {
+                "whois" => (
+                    json!({"member": {"type": "string", "description": "A pseudonym, a pseudonym prefix of 6 or more characters, or a name or its start"}}),
+                    json!(["member"]),
+                ),
+                "price" => (
+                    json!({"capability": {"type": "string", "description": "A capability kind, id or tag"}}),
+                    json!(["capability"]),
+                ),
+                _ => (json!({}), json!([])),
+            };
+            json!({
+                "name": format!("zone_{}", c.name),
+                "description": format!(
+                    "{} ({}), from this machine's joined zone device{}.",
+                    c.summary,
+                    c.usage,
+                    if c.core { "" } else { "; reads local state only" }
+                ),
+                "inputSchema": {"type": "object", "properties": props, "required": required},
+                "annotations": {"readOnlyHint": true, "openWorldHint": c.core},
+            })
+        })
+        .collect()
+}
+
+/// The command line a local tool call stands for, or None when it is not a local tool.
+fn local_line(params: &Value) -> Option<String> {
+    let name = params["name"].as_str()?.strip_prefix("zone_")?;
+    let spec = commands::spec(name)?;
+    let arg = match spec.name {
+        "whois" => params["arguments"]["member"].as_str().unwrap_or_default(),
+        "price" => params["arguments"]["capability"]
+            .as_str()
+            .unwrap_or_default(),
+        _ => "",
+    };
+    Some(format!("/{} {arg}", spec.name).trim_end().to_owned())
+}
+
+/// A local tool's result: the text, and the structured answer.
+fn local_call(state: &Path, line: &str) -> Value {
+    match slash::answer(state, line) {
+        Ok(r) => json!({
+            "content": [{"type": "text", "text": r.text}],
+            "structuredContent": r.json,
+            "isError": !r.ok,
+        }),
+        Err(e) => json!({"content": [{"type": "text", "text": e}], "isError": true}),
+    }
+}
+
+/// Whether `state` holds a device that joined a zone.
+fn has_joined_device(state: &Path) -> bool {
+    device::open_existing(state, std::sync::Arc::new(device::Offline))
+        .ok()
+        .flatten()
+        .is_some_and(|d| d.status().zone_id.is_some())
+}
+
+/// What the bridge answers itself: a local tool call, and, with no hosted server, the rest of
+/// the protocol. None: forward it.
+fn answer_locally(state: &Path, msg: &Value, hosted: bool) -> Option<Option<Value>> {
+    let method = msg.get("method")?.as_str()?;
+    let id = msg.get("id").cloned();
+    if method == "tools/call" {
+        if let Some(line) = local_line(&msg["params"]) {
+            let result = local_call(state, &line);
+            return Some(id.map(|id| json!({"jsonrpc": "2.0", "id": id, "result": result})));
+        }
+    }
+    if hosted {
+        return None;
+    }
+    let Some(id) = id else {
+        return Some(None); // a notification
+    };
+    let result = match method {
+        "initialize" => json!({
+            "protocolVersion": msg["params"]["protocolVersion"].as_str().unwrap_or("2025-06-18"),
+            "capabilities": {"tools": {}},
+            "serverInfo": {"name": "zone", "version": env!("CARGO_PKG_VERSION")},
+        }),
+        "tools/list" => json!({"tools": local_tools()}),
+        "ping" => json!({}),
+        "tools/call" => {
+            return Some(Some(
+                json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32602, "message": "unknown tool"}}),
+            ))
+        }
+        _ => {
+            return Some(Some(
+                json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32601, "message": "Method not found"}}),
+            ))
+        }
+    };
+    Some(Some(json!({"jsonrpc": "2.0", "id": id, "result": result})))
+}
+
 fn write_line(out: &mut impl Write, v: &Value) -> Result<(), String> {
     writeln!(out, "{v}")
         .and_then(|()| out.flush())
@@ -641,16 +753,21 @@ fn bridge_error(id: Value, message: &str) -> Value {
 /// `zone mcp`: newline-delimited JSON-RPC on stdin and stdout, until stdin ends. A request the
 /// bridge cannot deliver gets a JSON-RPC error naming why; stderr stays quiet for the agent.
 pub fn serve(state_dir: &Path) -> Result<(), String> {
-    let conn = Connection::load(state_dir)?;
+    let joined = has_joined_device(state_dir);
+    let conn = match Connection::load(state_dir) {
+        Ok(c) => Some(c),
+        Err(_) if joined => None,
+        Err(e) => return Err(e),
+    };
     state::check(state_dir)?;
-    let mut bridge = Bridge {
+    let mut bridge = conn.map(|conn| Bridge {
         state: state_dir.to_owned(),
         agent: agent(),
         conn,
         session: None,
         protocol: None,
         initialize_id: None,
-    };
+    });
     let stdin = std::io::stdin();
     let mut out = std::io::stdout().lock();
     for line in stdin.lock().lines() {
@@ -665,12 +782,33 @@ pub fn serve(state_dir: &Path) -> Result<(), String> {
             )?;
             continue;
         };
+        if joined {
+            if let Some(reply) = answer_locally(state_dir, &msg, bridge.is_some()) {
+                if let Some(r) = reply {
+                    write_line(&mut out, &r)?;
+                }
+                continue;
+            }
+        }
+        let Some(bridge) = bridge.as_mut() else {
+            continue;
+        };
         bridge.observe(&msg);
+        // The local tools join the hosted list's first page.
+        let list_id =
+            (joined && msg["method"] == "tools/list" && msg["params"]["cursor"].is_null())
+                .then(|| msg["id"].clone());
         match bridge.forward(&line) {
             Ok(replies) => {
                 for r in &replies {
                     bridge.observe_reply(r);
-                    write_line(&mut out, r)?;
+                    let mut r = r.clone();
+                    if list_id.as_ref().is_some_and(|id| r["id"] == *id) {
+                        if let Some(tools) = r["result"]["tools"].as_array_mut() {
+                            tools.extend(local_tools());
+                        }
+                    }
+                    write_line(&mut out, &r)?;
                 }
             }
             Err(e) => {
@@ -788,6 +926,42 @@ mod tests {
         let mode = std::fs::metadata(path(&dir)).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600);
         state::check(&dir).unwrap();
+    }
+
+    #[test]
+    fn every_command_is_a_local_tool_and_back() {
+        let tools = local_tools();
+        assert_eq!(tools.len(), commands::COMMANDS.len());
+        assert_eq!(tools[1]["inputSchema"]["required"], json!(["member"]));
+        let line = |name: &str, args: Value| local_line(&json!({"name": name, "arguments": args}));
+        assert_eq!(line("zone_who", json!({})).as_deref(), Some("/who"));
+        assert_eq!(
+            line("zone_whois", json!({"member": "Aly Bot"})).as_deref(),
+            Some("/whois Aly Bot")
+        );
+        assert_eq!(
+            line("zone_price", json!({"capability": "inference"})).as_deref(),
+            Some("/price inference")
+        );
+        assert_eq!(line("zone_join", json!({})), None, "a hosted tool goes on");
+    }
+
+    #[test]
+    fn without_a_hosted_server_the_bridge_speaks_for_itself() {
+        let tmp = tempfile::tempdir().unwrap();
+        let init = json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-03-26"}});
+        let r = answer_locally(tmp.path(), &init, false).unwrap().unwrap();
+        assert_eq!(r["result"]["protocolVersion"], "2025-03-26");
+        let list = json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"});
+        let r = answer_locally(tmp.path(), &list, false).unwrap().unwrap();
+        assert_eq!(r["result"]["tools"].as_array().unwrap().len(), 8);
+        let note = json!({"jsonrpc": "2.0", "method": "notifications/initialized"});
+        assert_eq!(answer_locally(tmp.path(), &note, false), Some(None));
+        // With a hosted server, only the local tools' calls stay here.
+        assert_eq!(answer_locally(tmp.path(), &list, true), None);
+        let call = json!({"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "zone_help", "arguments": {}}});
+        let r = answer_locally(tmp.path(), &call, true).unwrap().unwrap();
+        assert_eq!(r["id"], 3);
     }
 
     #[test]
