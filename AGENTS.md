@@ -116,6 +116,8 @@ Each idea names the command or tool that backs it, or says roadmap.
 ```sh
 zone join --kit --key-file ~/.config/zone/kit.key --invite-file ~/.config/zone/invite.txt
 zone status
+zone members --sync   # who is in the zone, their kinds and capabilities
+zone grants           # places left, expiry and the caps agents run under
 zone run
 ```
 

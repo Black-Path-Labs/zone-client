@@ -93,6 +93,23 @@ fn status_before_any_join_is_not_joined_json_and_makes_no_state() {
 }
 
 #[test]
+fn members_and_grants_before_any_join_fail_and_make_no_state() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = tmp.path().join("zone");
+    for cmd in [
+        &["members"][..],
+        &["grants"],
+        &["members", "--sync"],
+        &["grants", "--sync"],
+    ] {
+        let out = zone_in(&state, cmd);
+        assert_eq!(out.status.code(), Some(1), "{cmd:?}: {out:?}");
+        assert!(String::from_utf8_lossy(&out.stderr).contains("run `zone join` first"));
+    }
+    assert!(!state.exists());
+}
+
+#[test]
 fn run_before_any_join_fails_and_makes_no_state() {
     let tmp = tempfile::tempdir().unwrap();
     let state = tmp.path().join("zone");
