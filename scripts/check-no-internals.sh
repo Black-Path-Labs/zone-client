@@ -44,7 +44,7 @@ ai_terms='claude|anthropic|cursor|copilot|chatgpt|gpt-[0-9]|openai|codex|gemini|
 identity='Black Path Labs <admin@blackpathlabs.com>'
 # Commits already on main whose author or committer is not ${identity}. Rewriting main to fix
 # them would take a force-push, which main does not allow, so they stay and skip the identity
-# check only; their messages and diffs are still checked.
+# check only; their messages and diffs are still checked. Full 40-character SHAs only.
 #   82a849c: zone join long-poll (#4), landed by a GitHub rebase merge, which made the
 #            maintainer's GitHub account its committer.
 identity_allowlist=(

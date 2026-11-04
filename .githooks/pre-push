@@ -1,19 +1,21 @@
 #!/bin/sh
 # Before anything leaves this machine: the tree is free of internal names, and so is every
-# commit being pushed (author, committer, message and diff). Commits a remote already has have
-# left before and are not checked again, so merging main into a branch does not trip on them.
+# commit being pushed (author, committer, message and diff). Commits the remote being pushed to
+# already has (by its local tracking refs) have left before and are not checked again, so
+# merging main into a branch does not trip on them. A push to a bare URL checks everything.
 # Installed by scripts/setup-git-identity.sh (core.hooksPath=.githooks).
 set -eu
 
 check="$(git rev-parse --show-toplevel)/scripts/check-no-internals.sh"
 zero=0000000000000000000000000000000000000000
+remote="$1"
 "${check}" --tree
 while read -r _local_ref local_sha _remote_ref remote_sha; do
   [ "${local_sha}" != "${zero}" ] || continue
   if [ "${remote_sha}" = "${zero}" ]; then
-    # A new branch: check what no remote-tracking branch already has.
-    "${check}" "--commits=${local_sha} --not --remotes"
+    # A new branch: check what the remote does not already have.
+    "${check}" "--commits=${local_sha} --not --remotes=${remote}"
   else
-    "${check}" "--commits=${remote_sha}..${local_sha} --not --remotes"
+    "${check}" "--commits=${remote_sha}..${local_sha} --not --remotes=${remote}"
   fi
 done
