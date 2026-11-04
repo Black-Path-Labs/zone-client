@@ -14,6 +14,7 @@ mod join;
 mod mcp;
 mod receipts;
 mod record;
+mod room;
 mod run;
 mod secret;
 mod state;
@@ -196,6 +197,12 @@ enum Command {
         #[command(subcommand)]
         command: StreamCommand,
     },
+    /// Meeting rooms, end to end: create, list, close, set who may join, invite, and join with
+    /// audio, video and data. Recording needs every member's consent.
+    Room {
+        #[command(subcommand)]
+        command: RoomCommand,
+    },
     /// Serve MCP on stdio, bridged to a hosted zone MCP server (`zone mcp login URL` first).
     Mcp {
         #[command(subcommand)]
@@ -253,6 +260,68 @@ enum StreamCommand {
         video: Option<String>,
         #[command(flatten)]
         sip: stream::SipArgs,
+    },
+}
+
+#[derive(Subcommand)]
+enum RoomCommand {
+    /// Create a room in the zone and print it as JSON.
+    Create {
+        name: String,
+        /// A room-create quote id, needed beyond the free rooms.
+        #[arg(long, value_name = "ID")]
+        quote: Option<String>,
+    },
+    /// Print the zone's live rooms as JSON lines.
+    List,
+    /// Close a room for good: one this device created, or any from an owner device.
+    Close { id: String },
+    /// Set who may join a room: `members` (any member), `invite` (signed invites only) or
+    /// `listed` (the `--aor` and `--member` given).
+    Acl {
+        id: String,
+        #[arg(value_parser = ["members", "invite", "listed"])]
+        mode: String,
+        /// `listed`: an agent SIP address that may join; repeat for more.
+        #[arg(long = "aor", value_name = "AOR")]
+        aors: Vec<String>,
+        /// `listed`: a member's pseudonym that may join; repeat for more.
+        #[arg(long = "member", value_name = "PSEUDONYM")]
+        members: Vec<String>,
+    },
+    /// Invite a member to a room. The invite goes to that member alone as a direct note; this
+    /// prints its id and expiry, never its token.
+    Invite {
+        id: String,
+        pseudonym: String,
+        /// How long the invite is good for.
+        #[arg(long, value_name = "SECS", default_value_t = 600)]
+        ttl: u64,
+    },
+    /// Join a room and stay until `--for` runs out or SIGINT. Prints the join, every event
+    /// (participants, key epochs, `recording: on|off`) and the leave as JSON lines.
+    Join {
+        id: String,
+        /// Ogg Opus audio from a file (played in a loop) or `exec:PROGRAM ARGS`.
+        #[arg(long, value_name = "SRC")]
+        audio: Option<String>,
+        /// IVF VP8 video from a file (played in a loop) or `exec:PROGRAM ARGS`.
+        #[arg(long, value_name = "SRC")]
+        video: Option<String>,
+        /// Send each stdin line as a room data message and print room data as JSON lines.
+        #[arg(long)]
+        data: bool,
+        /// Leave after SECS.
+        #[arg(long = "for", value_name = "SECS")]
+        for_secs: Option<u64>,
+        /// Ask every member present to consent, and record into DIR on this device only once
+        /// all have.
+        #[arg(long, value_name = "DIR")]
+        record: Option<PathBuf>,
+        /// Answer another member's recording request; without it a terminal is asked, and
+        /// otherwise no consent is given.
+        #[arg(long, value_name = "ANSWER", value_parser = ["yes", "no"])]
+        consent_record: Option<String>,
     },
 }
 
@@ -445,6 +514,43 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
                 },
         } => {
             stream::open(&state, member, mode, quote, audio, video, &sip)?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Room { command } => {
+            match command {
+                RoomCommand::Create { name, quote } => room::create(&state, name, quote)?,
+                RoomCommand::List => room::list(&state)?,
+                RoomCommand::Close { id } => room::close(&state, id)?,
+                RoomCommand::Acl {
+                    id,
+                    mode,
+                    aors,
+                    members,
+                } => room::acl(&state, id, mode, aors, members)?,
+                RoomCommand::Invite { id, pseudonym, ttl } => {
+                    room::invite(&state, id, pseudonym, ttl)?
+                }
+                RoomCommand::Join {
+                    id,
+                    audio,
+                    video,
+                    data,
+                    for_secs,
+                    record,
+                    consent_record,
+                } => room::join_room(
+                    &state,
+                    id,
+                    room::JoinOptions {
+                        audio,
+                        video,
+                        data,
+                        for_secs,
+                        record,
+                        consent: consent_record.map(|a| a == "yes"),
+                    },
+                )?,
+            }
             Ok(ExitCode::SUCCESS)
         }
         Command::Mcp { command: None } => {
