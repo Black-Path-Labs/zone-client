@@ -66,6 +66,8 @@ const PUSH_WAIT: Duration = Duration::from_secs(2);
 const NOTE_WAIT: Duration = Duration::from_secs(30);
 const USER_AGENT: &str = "zone-cli";
 const SOCKET: &str = "live.sock";
+/// How long a withdrawn (closed) publication lingers at the edge before it lapses.
+const WITHDRAW_EXPIRES: u32 = 5;
 
 /// Where `zone run`'s live session connects. Without `--sip-ws` (or `ZONE_SIP_WS`) there is none.
 #[derive(clap::Args, Clone)]
@@ -299,7 +301,7 @@ fn serve(
     let mut waiting: HashMap<String, (mpsc::Sender<u16>, Instant)> = HashMap::new();
     loop {
         if run::stopped() {
-            presence.withdraw(&mut ws, &leg, &aor);
+            presence.withdraw(device, &mut ws, &leg, &aor, &edge.domain);
             let _ = send(&mut ws, leg.register(&creds, 0, USER_AGENT));
             let _ = ws.close(None);
             return Ok(());
@@ -454,10 +456,20 @@ impl Presence {
         false
     }
 
-    /// On a clean stop: withdraw the publication and end the subscription.
-    fn withdraw(&self, ws: &mut Socket, leg: &LiveLeg, aor: &str) {
-        if let Some(etag) = &self.etag {
-            let _ = send(ws, leg.publish(aor, "", 0, Some(etag)).0);
+    /// On a clean stop: publish a closed tuple over the etag, which watchers see at once, and
+    /// let it lapse in [`WITHDRAW_EXPIRES`]; then end the subscription. An `Expires: 0` alone
+    /// leaves the tuple in the edge's NOTIFY, so watchers would see the device until it expired.
+    fn withdraw(
+        &self,
+        device: &ZoneDevice,
+        ws: &mut Socket,
+        leg: &LiveLeg,
+        aor: &str,
+        domain: &str,
+    ) {
+        if let (Some(etag), Ok(body)) = (&self.etag, device.presence_closed_body(domain.to_owned()))
+        {
+            let _ = send(ws, leg.publish(aor, &body, WITHDRAW_EXPIRES, Some(etag)).0);
         }
         let _ = send(ws, leg.subscribe(aor, 0).0);
     }
