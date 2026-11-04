@@ -36,13 +36,16 @@ a process's environment. The client keeps it in memory only while it runs and ne
 - `vault.key`, the person secret, the store key and the device's private keys.
 - The kit key. Core and the zone's admitter see only a request it signed and its fingerprint.
 - Zone content in the clear. Messages, files and receipts reach Core encrypted to the zone's
-  members (HPKE), and Core cannot read them.
+  members (HPKE), and Core cannot read them. A note `zone run` pushes over its live session is
+  the same sealed message; the SIP edge relays it without reading it.
 
 `zone mcp` sends the agent's MCP messages, in the clear inside TLS, to the hosted zone MCP server,
 which acts for the agent in the zone. That server and the zone's Core read them.
 
 What does leave: the device's public bundle (its public keys and the device name `zone-cli`), its
-per-zone pseudonym, which the zone's members see, and the encrypted envelopes it sends. No
+per-zone pseudonym, which the zone's members see, and the encrypted envelopes it sends. While
+`zone run` holds the live session, the SIP edge also sees a registration under the zone's address
+(a bearer and a device proof Core checks) and the size and timing of each push. No
 command prints key material; `zone whoami` prints fingerprints only, and `zone status` prints a
 reason code, never Core's text.
 

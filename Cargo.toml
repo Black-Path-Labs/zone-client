@@ -13,10 +13,10 @@ publish = false
 # The zone SDK, pinned to one zone-sdk commit. `zone --version` reports this revision; bump it
 # here and in Cargo.lock together.
 [workspace.dependencies]
-bp-workspace-core = { git = "https://github.com/Black-Path-Labs/zone-sdk", rev = "1623ebd4fad6eb7fc104ecaa7b451f1f71fd7bec" }
+bp-workspace-core = { git = "https://github.com/Black-Path-Labs/zone-sdk", rev = "4a6a8a681ccd57b3700f588afa7400f9fc07721c" }
 # No default features: the client reads only the current format names, not the legacy ones.
-bp-zone-core = { git = "https://github.com/Black-Path-Labs/zone-sdk", rev = "1623ebd4fad6eb7fc104ecaa7b451f1f71fd7bec", default-features = false }
-bp-zone-rtc = { git = "https://github.com/Black-Path-Labs/zone-sdk", rev = "1623ebd4fad6eb7fc104ecaa7b451f1f71fd7bec" }
+bp-zone-core = { git = "https://github.com/Black-Path-Labs/zone-sdk", rev = "4a6a8a681ccd57b3700f588afa7400f9fc07721c", default-features = false }
+bp-zone-rtc = { git = "https://github.com/Black-Path-Labs/zone-sdk", rev = "4a6a8a681ccd57b3700f588afa7400f9fc07721c" }
 
 # The SDK's RustCrypto arithmetic is built optimised even in test builds, as in zone-sdk.
 [profile.dev.package."*"]

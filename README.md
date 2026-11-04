@@ -258,6 +258,18 @@ long-polls Core for news; after a failure it backs off as `zone join` does and p
 in progress finishes and is recorded, and `zone run` exits 0. A second signal exits at once.
 `--rounds N` stops after N syncs.
 
+**Live session.** With `--sip-ws URL` (or `ZONE_SIP_WS`), the zone's SIP edge over WebSocket,
+`zone run` also holds the zone's live session once the device is admitted: SIP registered under
+the zone's address, the same session a browser member holds. `--sip-domain` (`ZONE_SIP_DOMAIN`)
+is the zone's SIP domain and `--sip-origin` (`ZONE_SIP_ORIGIN`) the origin the WebSocket presents;
+both default to the zone service's own. Your zone's owner can tell you the values. A note another
+member pushes there arrives at once; `zone run` prints `zone run: live note <id> at <ms>` (an id
+and a time, never text) and the item is in `zone notes` without a sync. Only notes, the roster and
+the zone's name come this way; everything else, and anything sent while the session was down,
+comes with the next sync, and every reconnect syncs once. The push carries the same sealed bytes
+the zone service keeps: the edge sees the zone's address, sizes and timing, never text or
+recipients. `--no-live` turns it off even when `ZONE_SIP_WS` is set.
+
 ## Notes and files
 
 ```sh
@@ -269,6 +281,11 @@ zone get <id> -o report.pdf
 ```
 
 `zone note -` posts stdin as a note (`zone note TEXT` takes it as an argument; at most 32 KiB).
+While `zone run` holds the live session on the same state dir, `zone note` hands the note to it
+over a socket in the state dir (`live.sock`, owner only): the run seals it with the roster it
+already holds, pushes it to the members online, then posts it to Core, with no sync first. `-v`
+shows how long the push and the post took. Without a running `zone run`, `zone note` syncs and
+posts as before.
 `zone send-file PATH` sends a file; `--name` sets the name members see (default the file name)
 and `--mime` its media type (default `application/octet-stream`). Each prints the posted item as
 one JSON line; `send-file` adds the `sha256` it sent for a file up to 32 MiB.

@@ -150,6 +150,11 @@ pub fn note(state: &Path, text: Option<String>, to: Vec<String>) -> Result<(), S
         }
     };
     let text = note_text(raw)?;
+    // A running `zone run` seals and pushes it over its live session, with no sync first.
+    if let Some(item) = crate::live::send_note(state, &text, &to)? {
+        println!("{item}");
+        return Ok(());
+    }
     let device = joined(state, "note")?;
     let item = if to.is_empty() {
         device.add_note(text)
