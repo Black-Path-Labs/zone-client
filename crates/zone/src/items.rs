@@ -20,6 +20,7 @@ use serde_json::{json, Value};
 
 use crate::device;
 use crate::join;
+use crate::record::SyncRecord;
 use crate::transport::Http;
 
 /// The largest note, in bytes of UTF-8 text. Core refuses a sealed message over 64 KiB; this
@@ -36,13 +37,20 @@ pub fn joined(state: &Path, cmd: &str) -> Result<Arc<ZoneDevice>, String> {
     let device = device::open_existing(state, Arc::new(Http::default()))?
         .filter(|d| d.status().zone_id.is_some())
         .ok_or("no zone joined: run `zone join` first")?;
-    sync_once(&device, cmd);
+    sync_once(state, &device, cmd);
     Ok(device)
 }
 
-/// One sync that does not wait. A failure prints its kind, never Core's text.
-fn sync_once(device: &ZoneDevice, cmd: &str) {
-    if let Err(e) = device.sync(0) {
+/// One sync that does not wait, recorded for `zone status` and the roster reads. A failure
+/// prints its kind, never Core's text.
+fn sync_once(state: &Path, device: &ZoneDevice, cmd: &str) {
+    let synced = device.sync(0);
+    let mut record = SyncRecord::load(state);
+    record.synced(synced.as_ref().map(|_| ()));
+    if let Err(e) = record.save(state) {
+        eprintln!("zone {cmd}: {e}");
+    }
+    if let Err(e) = synced {
         eprintln!(
             "zone {cmd}: sync failed ({}); showing local state",
             join::kind(&e)

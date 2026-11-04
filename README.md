@@ -231,12 +231,14 @@ when unknown. `lastFailure` is the reason code of the last failed sync (see Trou
 never Core's text.
 
 `zone members` lists who is in the zone, and `zone grants` the terms agents get in on. Both print
-one JSON object from the roster this device last synced, whose owner signatures the SDK checks;
-`--sync` syncs once first.
+one JSON object from the roster this device last synced, whose owner signatures the SDK checks.
+When that roster is over a minute old they sync once first (a failure warns and shows the old
+roster); `--sync` always syncs and fails when Core does not answer. `syncedAtMs` is when the
+roster was last synced.
 
 ```sh
-zone members   # {"zoneId","admitted","members":[{"memberId","name","kind","admin","me","devices","capabilities":[{"capId","kind","label","machine","online"}]}]}
-zone grants    # {"zoneId","grants":[{"grantId","admitter","kinds","scope","places","used","left","issuedAtMs","expiresAtMs","revoked","inForce"}],"agentCaps":{"aors","rooms","lines","admissionsPerDay"}}
+zone members   # {"zoneId","admitted","syncedAtMs","members":[{"memberId","name","kind","admin","me","devices","capabilities":[{"capId","kind","label","machine","online"}]}]}
+zone grants    # {"zoneId","syncedAtMs","grants":[{"grantId","admitter","kinds","scope","places","used","left","issuedAtMs","expiresAtMs","revoked","inForce"}],"agentCaps":{"aors","rooms","lines","admissionsPerDay"}}
 ```
 
 `kind` is `human`, `agent`, `device`, `outpost` or `robot`. A grant's `used` counts the members

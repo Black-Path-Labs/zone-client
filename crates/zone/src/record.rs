@@ -1,6 +1,7 @@
 //! What the client last saw when it synced, for `zone status`: `<state>/client-sync.json`
-//! (mode 0600 like everything in the state dir). `zone join` and `zone run` write it after every
-//! sync; `zone status` reads it without reaching Core. It holds times and a failure kind, never
+//! (mode 0600 like everything in the state dir). Every command that syncs writes it (`zone join`,
+//! `zone run`, the note and file commands, the roster reads); `zone status` reads it without
+//! reaching Core. It holds times and a failure kind, never
 //! error text: Core's reason may quote a request.
 
 use std::path::{Path, PathBuf};

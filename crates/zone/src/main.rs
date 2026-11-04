@@ -94,14 +94,15 @@ enum Command {
     Status,
     /// Print the zone's members as JSON: pseudonym, name, kind (human, agent, ...), admin, devices
     /// and the capabilities each offers, with whether each is online. Reads the roster this
-    /// device last synced; `--sync` syncs once first.
+    /// device last synced, syncing once first when it is over a minute old; `--sync` always syncs.
     Members {
         #[arg(long)]
         sync: bool,
     },
     /// Print the zone's admission grants as JSON: places, used and left, expiry, the kinds and
     /// scope each admits, whether revoked, and the per-agent caps (AORs, rooms, lines, admissions
-    /// per day; null when the owner set none). Reads the last synced roster; `--sync` syncs first.
+    /// per day; null when the owner set none). Reads the last synced roster,
+    /// syncing once first when it is over a minute old; `--sync` always syncs.
     Grants {
         #[arg(long)]
         sync: bool,
