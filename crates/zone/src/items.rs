@@ -175,7 +175,7 @@ pub fn list(
         ItemKind::File => "files",
     };
     let device = joined(state, cmd)?;
-    let mut items = select(device.inbox(), kind, since);
+    let mut items = select(device.inbox(), kind.clone(), since);
     if let Some(secs) = wait.filter(|_| since.is_none() || items.is_empty()) {
         // Only items that arrive from now on end the wait; ids, since clocks differ.
         let seen: HashSet<String> = device.inbox().into_iter().map(|i| i.id).collect();
@@ -191,7 +191,7 @@ pub fn list(
                 .wait_for_inbox(left)
                 .map_err(|e| sdk_error(cmd, &e))?
             {
-                items = select(device.inbox(), kind, since)
+                items = select(device.inbox(), kind.clone(), since)
                     .into_iter()
                     .filter(|i| !seen.contains(&i.id))
                     .collect();
@@ -375,7 +375,10 @@ fn send_receipt(device: &ZoneDevice, id: &str, want: bool) -> &'static str {
     match device.sign_file_receipt(id.to_owned()) {
         Ok(_) => "sent",
         Err(e) => {
-            eprintln!("zone get: the file receipt was not sent ({})", join::kind(&e));
+            eprintln!(
+                "zone get: the file receipt was not sent ({})",
+                join::kind(&e)
+            );
             "failed"
         }
     }

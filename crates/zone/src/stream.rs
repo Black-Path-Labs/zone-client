@@ -19,9 +19,7 @@ use std::time::{Duration, Instant};
 use bp_zone_core::media_files::{
     FrameReader, IvfReader, IvfWriter, OggOpusReader, OggOpusWriter, Source,
 };
-use bp_zone_core::{
-    MediaTrack, SessionPath, StreamMode, StreamReceipt, StreamSession, ZoneDevice,
-};
+use bp_zone_core::{MediaTrack, SessionPath, StreamMode, StreamReceipt, StreamSession, ZoneDevice};
 use serde_json::{json, Value};
 
 use crate::items;
@@ -249,7 +247,9 @@ pub fn open(
             return Err(format!("{CMD}: --audio and --video need --mode rtp"))
         }
         Mode::Rtp if audio.is_none() && video.is_none() => {
-            return Err(format!("{CMD}: --mode rtp needs --audio SRC or --video SRC"))
+            return Err(format!(
+                "{CMD}: --mode rtp needs --audio SRC or --video SRC"
+            ))
         }
         _ => {}
     }
@@ -274,8 +274,10 @@ pub fn open(
                 .collect();
             players
                 .into_iter()
-                .map(|p| p.join().unwrap_or_else(|_| Err("a media player failed".into())))
-                .collect::<Result<(), String>>()
+                .try_for_each(|p| {
+                    p.join()
+                        .unwrap_or_else(|_| Err("a media player failed".into()))
+                })
                 .map_err(|e| format!("{CMD}: {e}"))
         }
     };

@@ -151,7 +151,10 @@ fn send_stdin(session: Arc<RoomSession>) {
                         break;
                     }
                     Err(e) => {
-                        eprintln!("zone room join: a data line was not sent ({})", join::kind(&e));
+                        eprintln!(
+                            "zone room join: a data line was not sent ({})",
+                            join::kind(&e)
+                        );
                         break;
                     }
                 }
@@ -169,8 +172,7 @@ fn answer(
     consent: Option<bool>,
     can_prompt: bool,
 ) {
-    let give = |s: &RoomSession, yes: bool| match s.consent_recording(request_id.to_owned(), yes)
-    {
+    let give = |s: &RoomSession, yes: bool| match s.consent_recording(request_id.to_owned(), yes) {
         Ok(()) => println!(
             "{}",
             json!({"event": "recording-consent", "request_id": request_id, "consent": yes})
