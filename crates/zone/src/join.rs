@@ -172,8 +172,9 @@ pub fn run(state: &Path, opts: Options<'_>) -> Result<Outcome, String> {
     let mut backoff = Backoff::default();
     let mut request_backoff = Backoff::default();
     let mut request_due = opts.kit.is_some().then_some(Instant::now());
-    // When the last kit request went through: polled fast for FAST_WINDOW after it.
-    let mut asked: Option<Instant> = None;
+    // When the last kit request (or this run's invite redeem) went through: polled fast for
+    // FAST_WINDOW after it, on a Core that does not hold the read for a joiner.
+    let mut asked: Option<Instant> = (!in_person && !resuming).then_some(Instant::now());
     // The last sync read the mailbox (Core counts this device a member) and was not held.
     let mut read_at_once = false;
     loop {
