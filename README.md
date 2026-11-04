@@ -163,9 +163,13 @@ zone admits the device and prints `joined <zone> as <pseudonym>`.
   The admitter still admits only within the owner's grant.
 
 `--no-wait` returns once joined (and, with `--kit`, asked). `--timeout SECS` stops waiting after
-SECS and exits 4. Running `zone join` again with the same invite resumes the wait. While it waits,
-a "not yet" answer backs off from 10 seconds to at most five minutes; a network failure, a 5xx or
-a 429 is retried after 10 seconds.
+SECS and exits 4. Running `zone join` again with the same invite resumes the wait: it looks first,
+so a device admitted meanwhile is done without asking again. While it waits it long-polls Core,
+which answers as soon as the roster admits the device. After a `--kit` request, a Core that does
+not hold the read is asked again every quarter second for 15 seconds, since an admitter that is
+online answers within about a second. Otherwise a "not yet" answer backs off from 10 seconds to at
+most five minutes; a network failure, a 5xx or a 429 is retried after 10 seconds. `-v` prints each
+step and each Core exchange with its time (the route only: no id, header or body).
 
 `--state DIR` puts the device's state somewhere other than `$XDG_DATA_HOME/zone` (else
 `~/.local/share/zone`, or `%LOCALAPPDATA%\zone` on Windows). It works with every subcommand.
