@@ -80,6 +80,10 @@ pub fn kind(e: &ZoneError) -> String {
         ZoneError::Vault { .. } => "vault".into(),
         ZoneError::Store { .. } => "store".into(),
         ZoneError::Crypto { .. } => "crypto".into(),
+        ZoneError::NotAMember { .. } => "not-a-member".into(),
+        ZoneError::BadRecipients { .. } => "bad-recipients".into(),
+        ZoneError::NotComplete => "not-complete".into(),
+        ZoneError::RelayQuota { .. } => "relay-quota".into(),
     }
 }
 

@@ -33,7 +33,9 @@ extern "C" fn on_signal(_: libc::c_int) {
     }
 }
 
-fn catch_signals() {
+/// SIGINT and SIGTERM set the stop flag; a second one exits at once. `zone stream` and
+/// `zone room join` use it too, to end a session cleanly and print its receipt.
+pub(crate) fn catch_signals() {
     for sig in [libc::SIGINT, libc::SIGTERM] {
         // SAFETY: the handler only touches an atomic and calls _exit, both async-signal-safe.
         unsafe {
@@ -45,7 +47,7 @@ fn catch_signals() {
     }
 }
 
-fn stopped() -> bool {
+pub(crate) fn stopped() -> bool {
     STOP.load(Ordering::SeqCst)
 }
 

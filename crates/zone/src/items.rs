@@ -278,6 +278,7 @@ mod tests {
             ts_ms,
             mine: false,
             complete: true,
+            to: vec![],
         }
     }
 
