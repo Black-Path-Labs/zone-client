@@ -237,6 +237,18 @@ enum Command {
     },
     /// This device and member (`/me`): pseudonym, name, fingerprint, admitted, online.
     Me,
+    /// The zone rep's three questions after joining (`/onboard`): with no ANSWER, start them
+    /// again; with one, answer the current question (`skip`, `skip all`) or the draft (`yes`
+    /// publishes it, anything else publishes nothing). Answers stay on this device until a yes.
+    Onboard {
+        #[arg(num_args = 0..)]
+        answer: Vec<String>,
+    },
+    /// Your zone profile (`/profile`); `zone profile off` withdraws it.
+    Profile {
+        #[arg(value_parser = ["off"])]
+        off: Option<String>,
+    },
     /// Run any slash command line (`zone slash "/whois Aly"`), as the composer would. `/help`
     /// lists them.
     Slash { line: String },
@@ -518,6 +530,14 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
         }
         Command::Me => {
             slash::run(&state, "/me")?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Onboard { answer } => {
+            slash::run(&state, &format!("/onboard {}", answer.join(" ")))?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Profile { off } => {
+            slash::run(&state, &format!("/profile {}", off.unwrap_or_default()))?;
             Ok(ExitCode::SUCCESS)
         }
         Command::Slash { line } => {
