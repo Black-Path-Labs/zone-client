@@ -158,9 +158,12 @@ zone admits the device and prints `joined <zone> as <pseudonym>`.
 - With a join address (`za_…`, which the zone's owner publishes), `zone join` asks Core for the
   zone code behind it, checks that the code hashes to the address, and joins as with that zone
   code. With `--kit` that is the whole self-service join, no invite needed:
-  `zone join --kit --key-file kit.key za_…`. `--core URL` names the Core to ask (default
-  `https://zone.blackpathlabs.com`). The address is not secret, so an argument draws no warning.
-  The admitter still admits only within the owner's grant.
+  `zone join --kit --key-file kit.key --invite-file address.txt`, or pipe the address in with
+  `zone join --kit --key-file kit.key -`. `--core URL` names the Core to ask (default
+  `https://zone.blackpathlabs.com`). Treat the address as a secret, like an invite: anyone who
+  has it and a kit key can join until the owner retires it or the grant runs out. Keep it in a
+  file of mode 0600, never on the command line (an argument draws a warning). The admitter still
+  admits only within the owner's grant.
 
 `--no-wait` returns once joined (and, with `--kit`, asked). `--timeout SECS` stops waiting after
 SECS and exits 4. Running `zone join` again with the same invite resumes the wait: it looks first,

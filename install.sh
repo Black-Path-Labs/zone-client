@@ -143,5 +143,7 @@ case ":${PATH}:" in
   *":${dir}:"*) ;;
   *) echo "zone install: add ${dir} to PATH" >&2 ;;
 esac
-echo "Next: save the invite to a file only you can read, then: zone join --invite-file <file>"
-echo "  (or pipe it in: zone join -). Not as an argument: that shows in shell history."
+echo "Next: save the invite or join address to a file only you can read (chmod 600), then:"
+echo "  zone join --invite-file <file>                                  (an invite: the owner admits)"
+echo "  zone join --kit --key-file <kit key file> --invite-file <file>  (a kit key: self-service)"
+echo "  Or pipe it in with -. Never as an argument: that shows in shell history."
