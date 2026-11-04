@@ -15,9 +15,11 @@ mod links;
 mod mcp;
 mod receipts;
 mod record;
+mod room;
 mod run;
 mod secret;
 mod state;
+mod stream;
 mod transport;
 mod vault;
 mod view;
@@ -116,18 +118,38 @@ enum Command {
     },
     /// Show this device's identity: fingerprints and pseudonym, never key material.
     Whoami,
-    /// Post a note to the zone, sealed to its members: TEXT, or `-` to read stdin (at most 32 KiB).
+    /// Post a note, sealed to its recipients: TEXT, or `-` to read stdin (at most 32 KiB). To the
+    /// whole zone, or with `--to` to one member or a group of up to 32.
     Note {
+        /// A recipient's pseudonym (from `zone members`); repeat for a group, up to 32. Without
+        /// it the note goes to the whole zone.
+        #[arg(long = "to", value_name = "PSEUDONYM")]
+        to: Vec<String>,
         /// The note's text, or `-` to read it from stdin.
         text: String,
     },
-    /// Sync once and print the zone's notes as JSON lines, oldest first.
+    /// Sync once and print the inbox's notes as JSON lines, oldest first: those addressed to
+    /// this member or sent by it, and zone-wide ones only when subscribed (`zone subscribe`).
     Notes {
         /// Only notes newer than TS (ms since the epoch, a `ts_ms` printed before).
         #[arg(long, value_name = "TS")]
         since: Option<i64>,
+        /// Wait up to SECS for a note that passes the inbox filter and print what arrived.
+        #[arg(long, value_name = "SECS")]
+        wait: Option<u32>,
     },
-    /// Send a file to the zone, sealed to its members (at most 32 MiB).
+    /// Turn zone-wide notes and files on (`zone`) or off (`--off`) for this device's inbox, or
+    /// with neither show the subscriptions. Off by default: only what is addressed to you.
+    Subscribe {
+        /// `zone`: every zone-wide note and file reaches the inbox.
+        #[arg(value_parser = ["zone"], conflicts_with = "off")]
+        what: Option<String>,
+        /// Only addressed notes and files reach the inbox.
+        #[arg(long)]
+        off: bool,
+    },
+    /// Send a file, sealed to its recipients: up to 32 MiB through the mailbox, up to 1 GiB as a
+    /// resumable large file, or any size live over a stream to one online member (`--live`).
     SendFile {
         path: PathBuf,
         /// The name members see (default: the path's file name).
@@ -136,23 +158,52 @@ enum Command {
         /// The file's media type (default `application/octet-stream`).
         #[arg(long, value_name = "TYPE")]
         mime: Option<String>,
+        /// A recipient's pseudonym; repeat for a group, up to 32. Without it the file goes to
+        /// the whole zone.
+        #[arg(long = "to", value_name = "PSEUDONYM")]
+        to: Vec<String>,
+        /// Send it live over a stream to this member, who runs `zone stream offer`. Any size;
+        /// both must be online.
+        #[arg(long, value_name = "PSEUDONYM", conflicts_with = "to")]
+        live: Option<String>,
+        #[command(flatten)]
+        sip: stream::SipArgs,
     },
-    /// Sync once and print the zone's files as JSON lines, oldest first.
+    /// Sync once and print the inbox's files as JSON lines, oldest first, with the receipts
+    /// members signed for the files this device sent.
     Files {
         /// Only files newer than TS (ms since the epoch, a `ts_ms` printed before).
         #[arg(long, value_name = "TS")]
         since: Option<i64>,
+        /// Wait up to SECS for a file that passes the inbox filter and print what arrived.
+        #[arg(long, value_name = "SECS")]
+        wait: Option<u32>,
     },
-    /// Save a complete file from the zone, checked against its sender's signed SHA-256.
+    /// Save a complete file, checked against its sender's signed SHA-256, then send the sender
+    /// a signed receipt. A large file resumes where an earlier run stopped.
     Get {
         /// The file's id, from `zone files`.
         id: String,
-        /// Where to write it, or `-` for stdout.
+        /// Where to write it, or `-` for stdout (files up to 32 MiB).
         #[arg(short, long, value_name = "PATH")]
         output: PathBuf,
         /// Replace an existing file at PATH.
         #[arg(long)]
         force: bool,
+        /// Do not send the sender a file receipt.
+        #[arg(long)]
+        no_receipt: bool,
+    },
+    /// Stream bytes or media between two members, end to end, with a signed receipt each side.
+    Stream {
+        #[command(subcommand)]
+        command: StreamCommand,
+    },
+    /// Meeting rooms, end to end: create, list, close, set who may join, invite, and join with
+    /// audio, video and data. Recording needs every member's consent.
+    Room {
+        #[command(subcommand)]
+        command: RoomCommand,
     },
     /// Invite one person with a magic link, or revoke one (`zone link new`, `zone link revoke`).
     Link {
@@ -181,6 +232,106 @@ enum McpCommand {
         /// Stop waiting for the consent after SECS.
         #[arg(long, value_name = "SECS", default_value_t = 900)]
         timeout: u64,
+    },
+}
+
+#[derive(Subcommand)]
+enum StreamCommand {
+    /// Publish this device's stream and answer one caller: a bytes stream goes to stdout, an rtp
+    /// stream to `--record DIR`. Prints the receipt as one JSON line at the end (on stderr for
+    /// bytes, whose stdout is the stream).
+    Offer {
+        /// Admit only this pseudonym; repeat for more. Without it any member may call.
+        #[arg(long, value_name = "PSEUDONYM")]
+        allow: Vec<String>,
+        #[arg(long, value_enum, default_value_t = stream::Mode::Bytes)]
+        mode: stream::Mode,
+        /// rtp: write the received audio (`audio.opus`) and video (`video.ivf`) into DIR.
+        #[arg(long, value_name = "DIR")]
+        record: Option<PathBuf>,
+        #[command(flatten)]
+        sip: stream::SipArgs,
+    },
+    /// Call PSEUDONYM's stream and send stdin (bytes) or `--audio`/`--video` (rtp). Prints the
+    /// receipt as one JSON line at the end.
+    Open {
+        /// The member whose stream to open.
+        member: String,
+        #[arg(long, value_enum, default_value_t = stream::Mode::Bytes)]
+        mode: stream::Mode,
+        /// A capability-call quote id, for a paid stream.
+        #[arg(long, value_name = "ID")]
+        quote: Option<String>,
+        /// rtp: Ogg Opus audio from a file, or `exec:PROGRAM ARGS` whose stdout is Ogg Opus.
+        #[arg(long, value_name = "SRC")]
+        audio: Option<String>,
+        /// rtp: IVF VP8 video from a file, or `exec:PROGRAM ARGS` whose stdout is IVF.
+        #[arg(long, value_name = "SRC")]
+        video: Option<String>,
+        #[command(flatten)]
+        sip: stream::SipArgs,
+    },
+}
+
+#[derive(Subcommand)]
+enum RoomCommand {
+    /// Create a room in the zone and print it as JSON.
+    Create {
+        name: String,
+        /// A room-create quote id, needed beyond the free rooms.
+        #[arg(long, value_name = "ID")]
+        quote: Option<String>,
+    },
+    /// Print the zone's live rooms as JSON lines.
+    List,
+    /// Close a room for good: one this device created, or any from an owner device.
+    Close { id: String },
+    /// Set who may join a room: `members` (any member), `invite` (signed invites only) or
+    /// `listed` (the `--aor` and `--member` given).
+    Acl {
+        id: String,
+        #[arg(value_parser = ["members", "invite", "listed"])]
+        mode: String,
+        /// `listed`: an agent SIP address that may join; repeat for more.
+        #[arg(long = "aor", value_name = "AOR")]
+        aors: Vec<String>,
+        /// `listed`: a member's pseudonym that may join; repeat for more.
+        #[arg(long = "member", value_name = "PSEUDONYM")]
+        members: Vec<String>,
+    },
+    /// Invite a member to a room. The invite goes to that member alone as a direct note; this
+    /// prints its id and expiry, never its token.
+    Invite {
+        id: String,
+        pseudonym: String,
+        /// How long the invite is good for.
+        #[arg(long, value_name = "SECS", default_value_t = 600)]
+        ttl: u64,
+    },
+    /// Join a room and stay until `--for` runs out or SIGINT. Prints the join, every event
+    /// (participants, key epochs, `recording: on|off`) and the leave as JSON lines.
+    Join {
+        id: String,
+        /// Ogg Opus audio from a file (played in a loop) or `exec:PROGRAM ARGS`.
+        #[arg(long, value_name = "SRC")]
+        audio: Option<String>,
+        /// IVF VP8 video from a file (played in a loop) or `exec:PROGRAM ARGS`.
+        #[arg(long, value_name = "SRC")]
+        video: Option<String>,
+        /// Send each stdin line as a room data message and print room data as JSON lines.
+        #[arg(long)]
+        data: bool,
+        /// Leave after SECS.
+        #[arg(long = "for", value_name = "SECS")]
+        for_secs: Option<u64>,
+        /// Ask every member present to consent, and record into DIR on this device only once
+        /// all have.
+        #[arg(long, value_name = "DIR")]
+        record: Option<PathBuf>,
+        /// Answer another member's recording request; without it a terminal is asked, and
+        /// otherwise no consent is given.
+        #[arg(long, value_name = "ANSWER", value_parser = ["yes", "no"])]
+        consent_record: Option<String>,
     },
 }
 
@@ -327,24 +478,113 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
             whoami(&state, kit.as_ref())?;
             Ok(ExitCode::SUCCESS)
         }
-        Command::Note { text } => {
-            items::note(&state, (text != "-").then_some(text))?;
+        Command::Note { to, text } => {
+            items::note(&state, (text != "-").then_some(text), to)?;
             Ok(ExitCode::SUCCESS)
         }
-        Command::Notes { since } => {
-            items::list(&state, bp_zone_core::ItemKind::Note, since)?;
+        Command::Notes { since, wait } => {
+            items::list(&state, bp_zone_core::ItemKind::Note, since, wait)?;
             Ok(ExitCode::SUCCESS)
         }
-        Command::SendFile { path, name, mime } => {
-            items::send_file(&state, &path, name, mime)?;
+        Command::Subscribe { what, off } => {
+            let on = if off { Some(false) } else { what.map(|_| true) };
+            items::subscribe(&state, on)?;
             Ok(ExitCode::SUCCESS)
         }
-        Command::Files { since } => {
-            items::list(&state, bp_zone_core::ItemKind::File, since)?;
+        Command::SendFile {
+            path,
+            live: Some(member),
+            sip,
+            ..
+        } => {
+            stream::send_live(&state, member, &path, &sip)?;
             Ok(ExitCode::SUCCESS)
         }
-        Command::Get { id, output, force } => {
-            items::get(&state, &id, &output, force)?;
+        Command::SendFile {
+            path,
+            name,
+            mime,
+            to,
+            live: None,
+            sip: _,
+        } => {
+            items::send_file(&state, &path, name, mime, to)?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Files { since, wait } => {
+            items::list(&state, bp_zone_core::ItemKind::File, since, wait)?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Get {
+            id,
+            output,
+            force,
+            no_receipt,
+        } => {
+            items::get(&state, &id, &output, force, !no_receipt)?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Stream {
+            command:
+                StreamCommand::Offer {
+                    allow,
+                    mode,
+                    record,
+                    sip,
+                },
+        } => {
+            stream::offer(&state, allow, mode, record, &sip)?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Stream {
+            command:
+                StreamCommand::Open {
+                    member,
+                    mode,
+                    quote,
+                    audio,
+                    video,
+                    sip,
+                },
+        } => {
+            stream::open(&state, member, mode, quote, audio, video, &sip)?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Room { command } => {
+            match command {
+                RoomCommand::Create { name, quote } => room::create(&state, name, quote)?,
+                RoomCommand::List => room::list(&state)?,
+                RoomCommand::Close { id } => room::close(&state, id)?,
+                RoomCommand::Acl {
+                    id,
+                    mode,
+                    aors,
+                    members,
+                } => room::acl(&state, id, mode, aors, members)?,
+                RoomCommand::Invite { id, pseudonym, ttl } => {
+                    room::invite(&state, id, pseudonym, ttl)?
+                }
+                RoomCommand::Join {
+                    id,
+                    audio,
+                    video,
+                    data,
+                    for_secs,
+                    record,
+                    consent_record,
+                } => room::join_room(
+                    &state,
+                    id,
+                    room::JoinOptions {
+                        audio,
+                        video,
+                        data,
+                        for_secs,
+                        record,
+                        consent: consent_record.map(|a| a == "yes"),
+                    },
+                )?,
+            }
             Ok(ExitCode::SUCCESS)
         }
         Command::Link {

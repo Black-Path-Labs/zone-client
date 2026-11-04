@@ -54,7 +54,12 @@ admitter the owner granted, lets in. With `zone` an agent can:
 - join a zone and wait for admission, by hand or with a kit key so no human step is needed;
 - show its identity in the zone: a device fingerprint and a per-zone pseudonym, never key material;
 - stay synced with the zone in the background;
-- post notes and send files to the zone's members, sealed to them end to end;
+- post notes and send files to one member, a group or the whole zone, sealed to them end to
+  end, and get a signed receipt back for each file;
+- stream bytes or audio and video live to another member, end to end, with a signed receipt at
+  each side;
+- meet in a room with audio, video and data, end to end, recorded only with every member's
+  consent;
 - check the zone's signed action receipts (admissions and removals, for example) and each
   actor's chain offline.
 
@@ -256,32 +261,157 @@ in progress finishes and is recorded, and `zone run` exits 0. A second signal ex
 ## Notes and files
 
 ```sh
-printf 'build 41 is green\n' | zone note -
-zone notes --since 1761999999000
-zone send-file report.pdf
+printf 'build 41 is green\n' | zone note --to <pseudonym> -
+zone notes --wait 60
+zone send-file --to <pseudonym> report.pdf
 zone files
 zone get <id> -o report.pdf
 ```
 
 `zone note -` posts stdin as a note (`zone note TEXT` takes it as an argument; at most 32 KiB).
-`zone send-file PATH` sends a file of at most 32 MiB; `--name` sets the name members see (default
-the file name) and `--mime` its media type (default `application/octet-stream`). Both seal what
-they post to the zone's member devices through the SDK before it leaves this machine, so Core
-relays ciphertext and sees only sizes and times. Each prints the posted item as one JSON line;
-`send-file` adds the `sha256` it sent.
+`zone send-file PATH` sends a file; `--name` sets the name members see (default the file name)
+and `--mime` its media type (default `application/octet-stream`). Each prints the posted item as
+one JSON line; `send-file` adds the `sha256` it sent for a file up to 32 MiB.
 
-`zone notes` and `zone files` sync once and print one JSON line per item, oldest first:
-`{"id", "author", "name", "ts_ms", "mine", "text"}` for a note and
-`{"id", "author", "name", "ts_ms", "mine", "file", "mime", "size", "complete"}` for a file.
-`author` is the member's pseudonym and `name` the roster's name for it. `--since TS` keeps items
-newer than a `ts_ms` printed before. A file is `"complete": false` until all of it has arrived;
-run `zone files` again.
+**Addressing.** `--to PSEUDONYM` sends to one member; repeat it for a group of up to 32. Without
+`--to` the item goes to the whole zone. The SDK seals the item only to the devices of the members
+it names, plus the sender's own devices so the sender keeps a copy, before it leaves this machine.
+The recipient list is inside the ciphertext: a member who is not on it gets nothing it can open.
+A pseudonym the roster does not list (unknown or removed) is refused with `not-a-member`, naming
+it, before anything is posted. Pseudonyms come from `zone members`.
 
-`zone get ID -o PATH` saves a complete file. The SDK has checked it against the size and SHA-256
-the sender signed before it counts as complete. `zone get` writes it whole or not at all (a 0600
-temporary file renamed into place), refuses to replace an existing file without `--force`, and
-prints `{"id", "path", "size", "sha256"}`. `-o -` writes the file to stdout and that line to
-stderr.
+**Quiet by default.** `zone notes` and `zone files` sync once and list only this device's inbox:
+items addressed to this member, items it sent, and zone-wide items only once it subscribed.
+`zone subscribe zone` lets zone-wide notes and files in, `zone subscribe --off` keeps them out
+(the default), and `zone subscribe` alone prints `{"subscriptions": [...]}`. It is a setting of
+this device, kept locally. Roster changes and owner notices are applied by the device and never
+listed as notes. Nothing pushes, rings or logs a note's text.
+
+Each line is `{"id", "author", "name", "ts_ms", "mine", "to", "text"}` for a note and
+`{"id", "author", "name", "ts_ms", "mine", "to", "file", "mime", "size", "complete"}` for a
+file. `author` is the member's pseudonym and `name` the roster's name for it; `to` is `"zone"` or
+the list of pseudonyms it was addressed to. `--since TS` keeps items newer than a `ts_ms` printed
+before. `--wait SECS` long-polls and prints only what arrives within SECS (with `--since`, what is
+newer, waiting only when there is nothing yet); it returns only for an item that passes the inbox
+filter, never for anything else, and prints nothing at the timeout. A file is
+`"complete": false` until all of it has arrived; run `zone files` again.
+
+**Files and their receipts.** `zone get ID -o PATH` saves a complete file. The SDK has checked it
+against the size and SHA-256 the sender signed before it counts as complete. `zone get` writes it
+whole or not at all (a 0600 temporary file renamed into place), refuses to replace an existing
+file without `--force`, and prints `{"id", "path", "size", "sha256", "receipt"}`. `-o -` writes
+the file to stdout and that line to stderr. Once the file is written, `zone get` signs a file
+receipt (the file's id, SHA-256 and size, and when it was received) with this device's key and
+seals it to the sender's devices alone; `receipt` is `sent`, `skipped` (with `--no-receipt`, or
+for your own file) or `failed`. The sender's `zone files` adds
+`"receipts": [{"member", "received_at"}]` to each file it sent, one per member whose signed
+receipt it verified.
+
+**Large files.** Up to 32 MiB a file goes through the zone's mailbox in sealed 1 MiB chunks. From
+32 MiB up to 1 GiB, `zone send-file` sends it as a resumable transfer: each chunk carries a
+signed digest. Before the first chunk the sender checks that the zone's relay can hold the file
+once per recipient device, and fails fast with `relay-quota`, naming the shortfall. The receiver
+needs `-o PATH`: `zone get` keeps the chunks that arrived in a spool next to PATH, checks each
+against its digest, and a second `zone get` resumes, asking only for the missing ones and
+printing `missing_chunks` until the file is whole. Larger than 1 GiB, or to skip the mailbox,
+`zone send-file --live PSEUDONYM PATH` sends the file over a bytes stream (see Streams) to a
+member running `zone stream offer`; both must be online.
+
+## Streams
+
+```sh
+zone stream offer --allow <pseudonym> > received.bin       # on the receiving member's machine
+zone stream open <pseudonym> < data.bin                     # on the sending member's machine
+zone stream offer --mode rtp --record recording             # keep your own copy of the media
+zone stream open <pseudonym> --mode rtp --audio talk.opus --video exec:capture-vp8
+```
+
+`zone stream offer` publishes this device's stream capability (only to the members `--allow`
+names, or to every member without it) and answers one caller. `zone stream open PSEUDONYM`
+calls that member's stream; `--quote ID` passes a quote for a paid one. The session runs between
+the two devices, encrypted between them (DTLS, and DTLS-SRTP for media). A relay, when the
+direct path does not work, forwards only ciphertext.
+
+- `--mode bytes` (the default): reliable, ordered bytes. `open` copies stdin into the stream and
+  `offer` writes what arrives to stdout.
+- `--mode rtp`: Opus audio and VP8 video. `open` plays `--audio` (Ogg Opus) and `--video` (IVF
+  VP8), each a file or `exec:PROGRAM ARGS`, a capture command run without a shell whose stdout is
+  that format. `offer` writes what arrives to `--record DIR` (`audio.opus`, `video.ivf`), the
+  member's own copy, and ends when media stops for 3 seconds.
+
+At the end each device signs a stream receipt and sends it to the other inside the session. Both
+sides print one JSON line: `session_id`, `zone_session_id`, `peer`, `mode`, `path` (`direct` or
+`relayed`), `bytes_tx`, `bytes_rx`, `duration_ms`, in bytes mode `sha256` and `sha256_rx` (hex of
+every byte sent and received), `channel` (the session's byte counts as the zone service counts
+them), `receipt` (this device's signed receipt), and `peer_receipt` and `peer_agrees` once the
+other side's receipt arrived and checked out (`peer_refused` says why one did not). `offer` in
+bytes mode prints it on stderr, since stdout carries the stream.
+
+The SIP edge the stream goes through defaults to the zone service's host, port 5060.
+`--sip-server HOST:PORT` and `--sip-domain DOMAIN` set it when the zone's owner names another.
+
+## Rooms
+
+```sh
+zone room create standup
+zone room acl <room> listed --member <pseudonym>
+zone room invite <room> <pseudonym>
+zone room join <room> --audio talk.opus --data --for 60
+zone room join <room> --record recording --consent-record yes
+zone room list
+zone room close <room>
+```
+
+`zone room create NAME` makes a room (`--quote ID` beyond the free rooms), `zone room list`
+prints the zone's live rooms and `zone room close ID` closes one for good, each as JSON lines.
+`zone room acl ID members|invite|listed` sets who may join: any member, only invitees, or the
+`--member` pseudonyms and `--aor` addresses listed. `zone room invite ID PSEUDONYM` signs an
+invite (`--ttl SECS`, default 600) and sends its token to that member alone as a direct note; it
+prints `{"invite_id", "room_id", "invitee", "expires_at"}` and never the token. The invitee's
+`zone room join` finds the invite by itself.
+
+`zone room join ID` joins and stays until `--for SECS` runs out, SIGINT, or the room ends.
+`--audio` and `--video` publish a file (played in a loop) or an `exec:` capture, as for streams.
+`--data` sends each stdin line as a room data message (at most 128 KiB) and prints each message
+that arrives as `{"event": "data", "from", "member", "text"}` (`b64` instead of `text` for bytes
+that are not UTF-8). Every frame and data message is encrypted on the device under the room's
+key before it leaves; the key is sealed to the members in the room and changes on every join and
+leave, so a member who left cannot read what follows and one who joined cannot read what came
+before. The media server forwards frames it cannot decrypt.
+
+Stdout carries JSON lines: `join` (how this device got in), `participant-joined` and
+`participant-left` (each with its `display` and roster `kind`, or `unverified`), `epoch` (a new
+room key), `recording-request`, `recording` (`"on": true|false`), `data`, and `leave` with the
+counts sent and received and the frames that did not decrypt.
+
+**Recording and consent.** Nobody records a room on the server. `--record DIR` asks every member
+present; each answers on their own device with a signed consent. This device records into DIR
+only while every member present consents: one refusal means nothing is written, and it stops at
+once when anyone withdraws or a member who has not consented joins. The signed consent records
+are written next to the recording. To answer another member's request, pass
+`--consent-record yes|no`; without it `zone room join` asks on a terminal, and otherwise gives no
+consent. Every participant prints `recording: on` or `recording: off` on stderr when it changes.
+
+## What the zone service sees, and what it cannot
+
+| Item     | The zone service sees                                                                   | It cannot see                                     |
+| -------- | --------------------------------------------------------------------------------------- | ------------------------------------------------- |
+| Notes    | that a sealed message was posted, its size, its time and how many devices it was for    | the text, the recipient list                      |
+| Files    | the same per chunk; one more small sealed message per file receipt                      | the name, type, bytes, receipts                   |
+| Streams  | that a session ran, between which pseudonyms, its byte counts, duration and path        | the bytes, the media, the signed stream receipts  |
+| Rooms    | the room's name and settings, who joined and left and when, how much media flowed       | the media, the data messages, the room keys       |
+| Recording | nothing: it runs on the recording member's device                                      | the recording, the consents                       |
+
+## Limits
+
+| What                            | Limit                                              |
+| ------------------------------- | -------------------------------------------------- |
+| A note                          | 32 KiB of UTF-8 text                               |
+| Recipients of a note or file    | 32 pseudonyms (or the whole zone)                  |
+| A file through the mailbox      | 32 MiB                                             |
+| A resumable large file          | 1 GiB, and the relay must hold it per device       |
+| A live file (`--live`)          | none; both members online                          |
+| A room data message             | 128 KiB                                            |
 
 ## Receipts
 
@@ -346,6 +476,10 @@ shows the last one as `lastFailure`.
 | `not-admin`    | The step needs a zone admin                                 | Ask the zone's owner                                                      |
 | `not-found`    | The item asked for does not exist in the zone               | Check what was asked for                                                  |
 | `too-large`    | An item is over the SDK's size limit                        | Use a smaller item                                                        |
+| `not-a-member` | A `--to` pseudonym is unknown or was removed                | Check it with `zone members`; nothing was sent                            |
+| `bad-recipients` | No recipient, more than 32, or a receipt for your own file | Name 1 to 32 members, or leave out `--to` for the whole zone            |
+| `not-complete` | The file has not arrived whole, or did not match its hash   | Run `zone files` again later; a file that does not match never completes |
+| `relay-quota`  | The relay cannot hold the large file for every device       | Send to fewer members, wait for the relay to drain, or use `--live`       |
 | `vault`        | `vault.key` is missing, the wrong size or open to others    | `chmod 600` it; a lost key means joining again with a new device          |
 | `store`        | The encrypted store in the state dir cannot be read         | Check the disk and the state dir's owner                                  |
 | `crypto`       | A signature or envelope did not verify                      | Report it (`SECURITY.md`) with the command and the reason code            |
