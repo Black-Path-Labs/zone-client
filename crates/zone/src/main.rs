@@ -9,6 +9,7 @@ use clap::{Parser, Subcommand};
 
 mod backoff;
 mod device;
+mod items;
 mod join;
 mod mcp;
 mod receipts;
@@ -96,6 +97,44 @@ enum Command {
     },
     /// Show this device's identity: fingerprints and pseudonym, never key material.
     Whoami,
+    /// Post a note to the zone, sealed to its members: TEXT, or `-` to read stdin (at most 32 KiB).
+    Note {
+        /// The note's text, or `-` to read it from stdin.
+        text: String,
+    },
+    /// Sync once and print the zone's notes as JSON lines, oldest first.
+    Notes {
+        /// Only notes newer than TS (ms since the epoch, a `ts_ms` printed before).
+        #[arg(long, value_name = "TS")]
+        since: Option<i64>,
+    },
+    /// Send a file to the zone, sealed to its members (at most 32 MiB).
+    SendFile {
+        path: PathBuf,
+        /// The name members see (default: the path's file name).
+        #[arg(long, value_name = "NAME")]
+        name: Option<String>,
+        /// The file's media type (default `application/octet-stream`).
+        #[arg(long, value_name = "TYPE")]
+        mime: Option<String>,
+    },
+    /// Sync once and print the zone's files as JSON lines, oldest first.
+    Files {
+        /// Only files newer than TS (ms since the epoch, a `ts_ms` printed before).
+        #[arg(long, value_name = "TS")]
+        since: Option<i64>,
+    },
+    /// Save a complete file from the zone, checked against its sender's signed SHA-256.
+    Get {
+        /// The file's id, from `zone files`.
+        id: String,
+        /// Where to write it, or `-` for stdout.
+        #[arg(short, long, value_name = "PATH")]
+        output: PathBuf,
+        /// Replace an existing file at PATH.
+        #[arg(long)]
+        force: bool,
+    },
     /// Serve MCP on stdio, bridged to a hosted zone MCP server (`zone mcp login URL` first).
     Mcp {
         #[command(subcommand)]
@@ -230,6 +269,26 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
         }
         Command::Whoami => {
             whoami(&state, kit.as_ref())?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Note { text } => {
+            items::note(&state, (text != "-").then_some(text))?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Notes { since } => {
+            items::list(&state, bp_zone_core::ItemKind::Note, since)?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::SendFile { path, name, mime } => {
+            items::send_file(&state, &path, name, mime)?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Files { since } => {
+            items::list(&state, bp_zone_core::ItemKind::File, since)?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Get { id, output, force } => {
+            items::get(&state, &id, &output, force)?;
             Ok(ExitCode::SUCCESS)
         }
         Command::Mcp { command: None } => {

@@ -16,7 +16,18 @@ fn help_lists_every_subcommand() {
     let out = zone(&["--help"]);
     assert!(out.status.success());
     let help = String::from_utf8(out.stdout).unwrap();
-    for sub in ["join", "status", "run", "receipts", "whoami"] {
+    for sub in [
+        "join",
+        "status",
+        "run",
+        "receipts",
+        "whoami",
+        "note",
+        "notes",
+        "send-file",
+        "files",
+        "get",
+    ] {
         assert!(help.contains(sub), "--help is missing {sub}:\n{help}");
     }
 }
@@ -88,5 +99,38 @@ fn run_before_any_join_fails_and_makes_no_state() {
     let out = zone_in(&state, &["run", "--rounds", "1"]);
     assert_eq!(out.status.code(), Some(1), "{out:?}");
     assert!(String::from_utf8_lossy(&out.stderr).contains("run `zone join` first"));
+    assert!(!state.exists());
+}
+
+#[test]
+fn notes_and_files_before_any_join_name_the_way_out_and_make_no_state() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = tmp.path().join("zone");
+    let file = tmp.path().join("f.txt");
+    std::fs::write(&file, b"abc").unwrap();
+    let file = file.to_str().unwrap();
+    for args in [
+        &["note", "hello"][..],
+        &["notes"],
+        &["send-file", file],
+        &["files", "--since", "0"],
+        &["get", "some-id", "-o", "out.bin"],
+    ] {
+        let out = zone_in(&state, args);
+        assert_eq!(out.status.code(), Some(1), "{args:?}");
+        let err = String::from_utf8(out.stderr).unwrap();
+        assert!(err.contains("no zone joined"), "{args:?}: {err}");
+        assert!(out.stdout.is_empty(), "{args:?}");
+    }
+    assert!(!state.exists());
+}
+
+#[test]
+fn an_empty_note_is_refused_before_any_state_is_read() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = tmp.path().join("zone");
+    let out = zone_in(&state, &["note", " "]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(String::from_utf8(out.stderr).unwrap().contains("empty"));
     assert!(!state.exists());
 }
