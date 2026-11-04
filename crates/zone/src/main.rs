@@ -9,6 +9,7 @@ use clap::{Parser, Subcommand};
 
 mod backoff;
 mod device;
+mod items;
 mod join;
 mod mcp;
 mod receipts;
@@ -18,6 +19,7 @@ mod secret;
 mod state;
 mod transport;
 mod vault;
+mod view;
 
 /// `zone join`: the SDK or Core refused; stderr names the reason kind.
 const EXIT_REFUSED: u8 = 3;
@@ -54,11 +56,13 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     /// Join a zone with an invite link, a zone code or a join address, and wait until admitted.
-    /// Pass an invite on stdin (`zone join -`) or in a file (`--invite-file`): an argument shows
-    /// in shell history and process listings. A join address is not secret.
+    /// Pass the invite, zone code or join address on stdin (`zone join -`) or in a file
+    /// (`--invite-file`), never as an argument: an argument shows in shell history and process
+    /// listings. A join address is a secret: anyone who has it and a kit key can join.
     Join {
         /// The invite link (`bpzi1.…`, or the web app's `…#join=bpzi1.…`), zone code (`bpzc1.…`)
-        /// or join address (`za_…`), or `-` to read it from stdin.
+        /// or join address (`za_…`), or `-` to read it from stdin. Given here it works but draws
+        /// a warning.
         #[arg(
             required_unless_present = "invite_file",
             conflicts_with = "invite_file"
@@ -83,6 +87,20 @@ enum Command {
     /// Print this device's zone state as JSON: zone, pseudonym, admitted or pending, members,
     /// last and next sync, last failure kind. Reads local state only.
     Status,
+    /// Print the zone's members as JSON: pseudonym, name, kind (human, agent, ...), admin, devices
+    /// and the capabilities each offers, with whether each is online. Reads the roster this
+    /// device last synced; `--sync` syncs once first.
+    Members {
+        #[arg(long)]
+        sync: bool,
+    },
+    /// Print the zone's admission grants as JSON: places, used and left, expiry, the kinds and
+    /// scope each admits, whether revoked, and the per-agent caps (AORs, rooms, lines, admissions
+    /// per day; null when the owner set none). Reads the last synced roster; `--sync` syncs first.
+    Grants {
+        #[arg(long)]
+        sync: bool,
+    },
     /// Keep the joined zone synced until SIGINT or SIGTERM.
     Run {
         /// Stop after N syncs.
@@ -96,6 +114,44 @@ enum Command {
     },
     /// Show this device's identity: fingerprints and pseudonym, never key material.
     Whoami,
+    /// Post a note to the zone, sealed to its members: TEXT, or `-` to read stdin (at most 32 KiB).
+    Note {
+        /// The note's text, or `-` to read it from stdin.
+        text: String,
+    },
+    /// Sync once and print the zone's notes as JSON lines, oldest first.
+    Notes {
+        /// Only notes newer than TS (ms since the epoch, a `ts_ms` printed before).
+        #[arg(long, value_name = "TS")]
+        since: Option<i64>,
+    },
+    /// Send a file to the zone, sealed to its members (at most 32 MiB).
+    SendFile {
+        path: PathBuf,
+        /// The name members see (default: the path's file name).
+        #[arg(long, value_name = "NAME")]
+        name: Option<String>,
+        /// The file's media type (default `application/octet-stream`).
+        #[arg(long, value_name = "TYPE")]
+        mime: Option<String>,
+    },
+    /// Sync once and print the zone's files as JSON lines, oldest first.
+    Files {
+        /// Only files newer than TS (ms since the epoch, a `ts_ms` printed before).
+        #[arg(long, value_name = "TS")]
+        since: Option<i64>,
+    },
+    /// Save a complete file from the zone, checked against its sender's signed SHA-256.
+    Get {
+        /// The file's id, from `zone files`.
+        id: String,
+        /// Where to write it, or `-` for stdout.
+        #[arg(short, long, value_name = "PATH")]
+        output: PathBuf,
+        /// Replace an existing file at PATH.
+        #[arg(long)]
+        force: bool,
+    },
     /// Serve MCP on stdio, bridged to a hosted zone MCP server (`zone mcp login URL` first).
     Mcp {
         #[command(subcommand)]
@@ -177,9 +233,6 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
                     }
                     secret::read_invite(std::path::Path::new("-"))?
                 }
-                (Some(code), None) if bp_workspace_core::space::is_join_address(code.trim()) => {
-                    zeroize::Zeroizing::new(code.to_owned())
-                }
                 (Some(code), None) => {
                     eprintln!(
                         "zone join: an invite on the command line shows in shell history and \
@@ -215,6 +268,14 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
             status(&state)?;
             Ok(ExitCode::SUCCESS)
         }
+        Command::Members { sync } => {
+            println!("{}", view::members(&state, sync)?);
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Grants { sync } => {
+            println!("{}", view::grants(&state, sync)?);
+            Ok(ExitCode::SUCCESS)
+        }
         Command::Run { rounds } => {
             run::run(&state, rounds)?;
             Ok(ExitCode::SUCCESS)
@@ -230,6 +291,26 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
         }
         Command::Whoami => {
             whoami(&state, kit.as_ref())?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Note { text } => {
+            items::note(&state, (text != "-").then_some(text))?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Notes { since } => {
+            items::list(&state, bp_zone_core::ItemKind::Note, since)?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::SendFile { path, name, mime } => {
+            items::send_file(&state, &path, name, mime)?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Files { since } => {
+            items::list(&state, bp_zone_core::ItemKind::File, since)?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Get { id, output, force } => {
+            items::get(&state, &id, &output, force)?;
             Ok(ExitCode::SUCCESS)
         }
         Command::Mcp { command: None } => {

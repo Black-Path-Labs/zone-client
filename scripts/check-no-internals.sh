@@ -42,6 +42,20 @@ EOF
 
 ai_terms='claude|anthropic|cursor|copilot|chatgpt|gpt-[0-9]|openai|codex|gemini|grok|ai-generated|generated (with|by)|co-authored-by'
 identity='Black Path Labs <admin@blackpathlabs.com>'
+# Commits already on main whose author or committer is not ${identity}. Rewriting main to fix
+# them would take a force-push, which main does not allow, so they stay and skip the identity
+# check only; their messages and diffs are still checked. Full 40-character SHAs only.
+#   82a849c: zone join long-poll (#4), landed by a GitHub rebase merge, which made the
+#            maintainer's GitHub account its committer.
+#   f1b047f, 6cb484c, 466d217, 2d45267: #10, #8, #6 and #5, landed by GitHub squash merges,
+#            which made the maintainer's account their author and GitHub their committer.
+identity_allowlist=(
+  82a849c8f78381ba2c4de3882dff6835c21fcbfb
+  f1b047f6e0eb1e086a6b7e0701bff2c08c45fae8
+  6cb484ca4dce7323de228c69eb5b76cda04b3cea
+  466d217751c9c99426524a963f45808e3ecb45b4
+  2d452679c03d2c52f9fc75812f2aeb089783a2b8
+)
 found=0
 
 report() {
@@ -67,7 +81,7 @@ scan_history() { # $@ = rev-list arguments
   [ "$#" -gt 0 ] || return 0
   for c in $(git rev-list "$@"); do
     who="$(git log -1 --format='%an <%ae>|%cn <%ce>' "${c}")"
-    if [ "${who}" != "${identity}|${identity}" ]; then
+    if [ "${who}" != "${identity}|${identity}" ] && [[ " ${identity_allowlist[*]} " != *" ${c} "* ]]; then
       report "commit ${c} is not by ${identity}" <<<"${who}"
     fi
     hits="$(git log -1 --format=%B "${c}" | grep -niE "${ai_terms}" || true)"
