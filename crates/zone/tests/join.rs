@@ -89,6 +89,51 @@ fn an_unreachable_core_fails_the_join_with_exit_1() {
     }
 }
 
+/// A magic link for the unreachable zone, made here with a fresh secret; `tamper` swaps in the
+/// id another secret derives.
+fn unreachable_magic_link(tamper: bool) -> String {
+    use bp_workspace_core::magic_link::{new_secret, MagicLink};
+    let zone = ZoneCode::decode(&unreachable_zone_code()).unwrap();
+    let (secret, keys) = new_secret();
+    let link_id = if tamper {
+        new_secret().1.link_id
+    } else {
+        keys.link_id
+    };
+    MagicLink {
+        zone,
+        link_id,
+        secret,
+        expires_at: "2099-01-01T00:00:00.000Z".into(),
+        label: "Test Person".into(),
+    }
+    .encode()
+    .unwrap()
+}
+
+#[test]
+fn a_magic_link_is_taken_from_a_private_file_and_a_tampered_one_is_refused() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = tmp.path().join("zone");
+    let file = tmp.path().join("link.txt");
+    std::fs::write(&file, unreachable_magic_link(false)).unwrap();
+    std::fs::set_permissions(&file, Permissions::from_mode(0o600)).unwrap();
+    let path = file.to_str().unwrap();
+    // A good link gets as far as Core.
+    let out = zone(&state, &["join", "--no-wait", "--invite-file", path]);
+    assert_eq!(out.status.code(), Some(1), "{out:?}");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("Core unreachable"), "{err}");
+    // A link whose id is not its secret's is refused before Core.
+    let tmp = tempfile::tempdir().unwrap();
+    let state = tmp.path().join("zone");
+    std::fs::write(&file, unreachable_magic_link(true)).unwrap();
+    let out = zone(&state, &["join", "--no-wait", "--invite-file", path]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!err.contains("Core unreachable"), "{err}");
+    assert_ne!(out.status.code(), Some(0), "{out:?}");
+}
+
 /// `zone` with `stdin` as its standard input.
 fn zone_stdin(state: &Path, args: &[&str], stdin: &[u8]) -> Output {
     let mut child = Command::new(env!("CARGO_BIN_EXE_zone"))
