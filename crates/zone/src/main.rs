@@ -114,18 +114,38 @@ enum Command {
     },
     /// Show this device's identity: fingerprints and pseudonym, never key material.
     Whoami,
-    /// Post a note to the zone, sealed to its members: TEXT, or `-` to read stdin (at most 32 KiB).
+    /// Post a note, sealed to its recipients: TEXT, or `-` to read stdin (at most 32 KiB). To the
+    /// whole zone, or with `--to` to one member or a group of up to 32.
     Note {
+        /// A recipient's pseudonym (from `zone members`); repeat for a group, up to 32. Without
+        /// it the note goes to the whole zone.
+        #[arg(long = "to", value_name = "PSEUDONYM")]
+        to: Vec<String>,
         /// The note's text, or `-` to read it from stdin.
         text: String,
     },
-    /// Sync once and print the zone's notes as JSON lines, oldest first.
+    /// Sync once and print the inbox's notes as JSON lines, oldest first: those addressed to
+    /// this member or sent by it, and zone-wide ones only when subscribed (`zone subscribe`).
     Notes {
         /// Only notes newer than TS (ms since the epoch, a `ts_ms` printed before).
         #[arg(long, value_name = "TS")]
         since: Option<i64>,
+        /// Wait up to SECS for a note that passes the inbox filter and print what arrived.
+        #[arg(long, value_name = "SECS")]
+        wait: Option<u32>,
     },
-    /// Send a file to the zone, sealed to its members (at most 32 MiB).
+    /// Turn zone-wide notes and files on (`zone`) or off (`--off`) for this device's inbox, or
+    /// with neither show the subscriptions. Off by default: only what is addressed to you.
+    Subscribe {
+        /// `zone`: every zone-wide note and file reaches the inbox.
+        #[arg(value_parser = ["zone"], conflicts_with = "off")]
+        what: Option<String>,
+        /// Only addressed notes and files reach the inbox.
+        #[arg(long)]
+        off: bool,
+    },
+    /// Send a file, sealed to its recipients: up to 32 MiB through the mailbox, up to 1 GiB as a
+    /// resumable large file, or any size live over a stream to one online member (`--live`).
     SendFile {
         path: PathBuf,
         /// The name members see (default: the path's file name).
@@ -134,23 +154,35 @@ enum Command {
         /// The file's media type (default `application/octet-stream`).
         #[arg(long, value_name = "TYPE")]
         mime: Option<String>,
+        /// A recipient's pseudonym; repeat for a group, up to 32. Without it the file goes to
+        /// the whole zone.
+        #[arg(long = "to", value_name = "PSEUDONYM")]
+        to: Vec<String>,
     },
-    /// Sync once and print the zone's files as JSON lines, oldest first.
+    /// Sync once and print the inbox's files as JSON lines, oldest first, with the receipts
+    /// members signed for the files this device sent.
     Files {
         /// Only files newer than TS (ms since the epoch, a `ts_ms` printed before).
         #[arg(long, value_name = "TS")]
         since: Option<i64>,
+        /// Wait up to SECS for a file that passes the inbox filter and print what arrived.
+        #[arg(long, value_name = "SECS")]
+        wait: Option<u32>,
     },
-    /// Save a complete file from the zone, checked against its sender's signed SHA-256.
+    /// Save a complete file, checked against its sender's signed SHA-256, then send the sender
+    /// a signed receipt. A large file resumes where an earlier run stopped.
     Get {
         /// The file's id, from `zone files`.
         id: String,
-        /// Where to write it, or `-` for stdout.
+        /// Where to write it, or `-` for stdout (files up to 32 MiB).
         #[arg(short, long, value_name = "PATH")]
         output: PathBuf,
         /// Replace an existing file at PATH.
         #[arg(long)]
         force: bool,
+        /// Do not send the sender a file receipt.
+        #[arg(long)]
+        no_receipt: bool,
     },
     /// Serve MCP on stdio, bridged to a hosted zone MCP server (`zone mcp login URL` first).
     Mcp {
@@ -293,24 +325,39 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
             whoami(&state, kit.as_ref())?;
             Ok(ExitCode::SUCCESS)
         }
-        Command::Note { text } => {
-            items::note(&state, (text != "-").then_some(text))?;
+        Command::Note { to, text } => {
+            items::note(&state, (text != "-").then_some(text), to)?;
             Ok(ExitCode::SUCCESS)
         }
-        Command::Notes { since } => {
-            items::list(&state, bp_zone_core::ItemKind::Note, since)?;
+        Command::Notes { since, wait } => {
+            items::list(&state, bp_zone_core::ItemKind::Note, since, wait)?;
             Ok(ExitCode::SUCCESS)
         }
-        Command::SendFile { path, name, mime } => {
-            items::send_file(&state, &path, name, mime)?;
+        Command::Subscribe { what, off } => {
+            let on = if off { Some(false) } else { what.map(|_| true) };
+            items::subscribe(&state, on)?;
             Ok(ExitCode::SUCCESS)
         }
-        Command::Files { since } => {
-            items::list(&state, bp_zone_core::ItemKind::File, since)?;
+        Command::SendFile {
+            path,
+            name,
+            mime,
+            to,
+        } => {
+            items::send_file(&state, &path, name, mime, to)?;
             Ok(ExitCode::SUCCESS)
         }
-        Command::Get { id, output, force } => {
-            items::get(&state, &id, &output, force)?;
+        Command::Files { since, wait } => {
+            items::list(&state, bp_zone_core::ItemKind::File, since, wait)?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Get {
+            id,
+            output,
+            force,
+            no_receipt,
+        } => {
+            items::get(&state, &id, &output, force, !no_receipt)?;
             Ok(ExitCode::SUCCESS)
         }
         Command::Mcp { command: None } => {
