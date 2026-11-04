@@ -12,6 +12,7 @@ mod device;
 mod items;
 mod join;
 mod links;
+mod live;
 mod mcp;
 mod receipts;
 mod record;
@@ -105,11 +106,14 @@ enum Command {
         #[arg(long)]
         sync: bool,
     },
-    /// Keep the joined zone synced until SIGINT or SIGTERM.
+    /// Keep the joined zone synced until SIGINT or SIGTERM, and hold the live session: notes
+    /// other members push arrive at once, and `zone note` goes through it.
     Run {
         /// Stop after N syncs.
         #[arg(long, value_name = "N")]
         rounds: Option<u32>,
+        #[command(flatten)]
+        live: live::LiveArgs,
     },
     /// Work with zone receipts.
     Receipts {
@@ -461,8 +465,8 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
             println!("{}", view::grants(&state, sync)?);
             Ok(ExitCode::SUCCESS)
         }
-        Command::Run { rounds } => {
-            run::run(&state, rounds)?;
+        Command::Run { rounds, live } => {
+            run::run(&state, rounds, live)?;
             Ok(ExitCode::SUCCESS)
         }
         Command::Receipts {

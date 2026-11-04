@@ -16,6 +16,7 @@ use rand_core::{OsRng, RngCore};
 use crate::backoff::{Backoff, RETRY};
 use crate::device;
 use crate::join;
+use crate::live::{self, Live, LiveArgs};
 use crate::record::SyncRecord;
 use crate::transport::Http;
 
@@ -66,13 +67,17 @@ fn sleep(wait: Duration) {
 /// Long-poll for news on a thread of its own, so a stop signal need not wait for Core's answer.
 /// The poll holds no device lock and writes nothing, so leaving it behind at exit is safe. A
 /// failed poll waits the short retry, so a Core that syncs but cannot long-poll is not spun on.
-fn wait_for_news(device: &Arc<ZoneDevice>) {
+/// The live session cuts the wait short when it asks for a catch-up sync.
+fn wait_for_news(device: &Arc<ZoneDevice>, live: Option<&Live>) {
     let (tx, rx) = mpsc::channel();
     let d = Arc::clone(device);
     std::thread::spawn(move || {
         let _ = tx.send(d.wait_for_news(LONG_POLL_SECS).is_ok());
     });
     while !stopped() {
+        if live.is_some_and(|l| l.take_catch_up()) {
+            return;
+        }
         match rx.recv_timeout(TICK) {
             Ok(true) | Err(mpsc::RecvTimeoutError::Disconnected) => return,
             Ok(false) => return sleep(RETRY),
@@ -81,8 +86,9 @@ fn wait_for_news(device: &Arc<ZoneDevice>) {
     }
 }
 
-/// Sync until stopped, or for `rounds` syncs.
-pub fn run(state: &Path, rounds: Option<u32>) -> Result<(), String> {
+/// Sync until stopped, or for `rounds` syncs. Once the device is admitted, hold the live session
+/// too (live.rs) when `--sip-ws` names the edge.
+pub fn run(state: &Path, rounds: Option<u32>, live_args: LiveArgs) -> Result<(), String> {
     catch_signals();
     let device = device::open_existing(state, Arc::new(Http::default()))?
         .filter(|d| d.status().zone_id.is_some())
@@ -90,6 +96,7 @@ pub fn run(state: &Path, rounds: Option<u32>) -> Result<(), String> {
     let mut record = SyncRecord::load(state);
     let mut backoff = Backoff::default();
     let mut round = 0u32;
+    let mut session: Option<(Arc<Live>, live::NoteSocket)> = None;
     while !stopped() {
         let synced = device.sync(0);
         record.synced(synced.as_ref().map(|_| ()));
@@ -111,6 +118,11 @@ pub fn run(state: &Path, rounds: Option<u32>) -> Result<(), String> {
                 Some(wait)
             }
         };
+        if session.is_none() && live_args.wanted() && device.status().admitted {
+            let l = Live::start(Arc::clone(&device), live_args.clone());
+            let socket = live::listen(state, Arc::clone(&device), Arc::clone(&l))?;
+            session = Some((l, socket));
+        }
         round += 1;
         let last = rounds.is_some_and(|n| round >= n);
         if !last {
@@ -122,7 +134,7 @@ pub fn run(state: &Path, rounds: Option<u32>) -> Result<(), String> {
         }
         match wait {
             Some(w) => sleep(w),
-            None => wait_for_news(&device),
+            None => wait_for_news(&device, session.as_ref().map(|(l, _)| l.as_ref())),
         }
     }
     record.next_sync_ms = None;
