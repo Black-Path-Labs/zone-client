@@ -47,8 +47,14 @@ identity='Black Path Labs <admin@blackpathlabs.com>'
 # check only; their messages and diffs are still checked. Full 40-character SHAs only.
 #   82a849c: zone join long-poll (#4), landed by a GitHub rebase merge, which made the
 #            maintainer's GitHub account its committer.
+#   f1b047f, 6cb484c, 466d217, 2d45267: #10, #8, #6 and #5, landed by GitHub squash merges,
+#            which made the maintainer's account their author and GitHub their committer.
 identity_allowlist=(
   82a849c8f78381ba2c4de3882dff6835c21fcbfb
+  f1b047f6e0eb1e086a6b7e0701bff2c08c45fae8
+  6cb484ca4dce7323de228c69eb5b76cda04b3cea
+  466d217751c9c99426524a963f45808e3ecb45b4
+  2d452679c03d2c52f9fc75812f2aeb089783a2b8
 )
 found=0
 
