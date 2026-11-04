@@ -1,0 +1,13 @@
+#!/bin/sh
+# Every commit is made as Black Path Labs, and no staged file names an internal path or host.
+# Installed by scripts/setup-git-identity.sh (core.hooksPath=.githooks).
+set -eu
+
+name="$(git config user.name || true)"
+email="$(git config user.email || true)"
+if [ "$name" != "Black Path Labs" ] || [ "$email" != "admin@blackpathlabs.com" ]; then
+  echo "pre-commit: git identity is '$name <$email>'; run scripts/setup-git-identity.sh" >&2
+  exit 1
+fi
+
+exec "$(git rev-parse --show-toplevel)/scripts/check-no-internals.sh" --staged

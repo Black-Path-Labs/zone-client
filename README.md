@@ -47,6 +47,7 @@ admitter the owner granted, lets in. With `zone` an agent can:
 - join a zone and wait for admission, by hand or with a kit key so no human step is needed;
 - show its identity in the zone: a device fingerprint and a per-zone pseudonym, never key material;
 - stay synced with the zone in the background;
+- post notes and send files to the zone's members, sealed to them end to end;
 - check the zone's signed action receipts (admissions and removals, for example) and each
   actor's chain offline.
 
@@ -157,14 +158,21 @@ zone admits the device and prints `joined <zone> as <pseudonym>`.
 - With a join address (`za_…`, which the zone's owner publishes), `zone join` asks Core for the
   zone code behind it, checks that the code hashes to the address, and joins as with that zone
   code. With `--kit` that is the whole self-service join, no invite needed:
-  `zone join --kit --key-file kit.key za_…`. `--core URL` names the Core to ask (default
-  `https://zone.blackpathlabs.com`). The address is not secret, so an argument draws no warning.
-  The admitter still admits only within the owner's grant.
+  `zone join --kit --key-file kit.key --invite-file address.txt`, or pipe the address in with
+  `zone join --kit --key-file kit.key -`. `--core URL` names the Core to ask (default
+  `https://zone.blackpathlabs.com`). Treat the address as a secret, like an invite: anyone who
+  has it and a kit key can join until the owner retires it or the grant runs out. Keep it in a
+  file of mode 0600, never on the command line (an argument draws a warning). The admitter still
+  admits only within the owner's grant.
 
 `--no-wait` returns once joined (and, with `--kit`, asked). `--timeout SECS` stops waiting after
-SECS and exits 4. Running `zone join` again with the same invite resumes the wait. While it waits,
-a "not yet" answer backs off from 10 seconds to at most five minutes; a network failure, a 5xx or
-a 429 is retried after 10 seconds.
+SECS and exits 4. Running `zone join` again with the same invite resumes the wait: it looks first,
+so a device admitted meanwhile is done without asking again. While it waits it long-polls Core,
+which answers as soon as the roster admits the device. After a `--kit` request, a Core that does
+not hold the read is asked again every quarter second for 15 seconds, since an admitter that is
+online answers within about a second. Otherwise a "not yet" answer backs off from 10 seconds to at
+most five minutes; a network failure, a 5xx or a 429 is retried after 10 seconds. `-v` prints each
+step and each Core exchange with its time (the route only: no id, header or body).
 
 `--state DIR` puts the device's state somewhere other than `$XDG_DATA_HOME/zone` (else
 `~/.local/share/zone`, or `%LOCALAPPDATA%\zone` on Windows). It works with every subcommand.
@@ -212,6 +220,36 @@ long-polls Core for news; after a failure it backs off as `zone join` does and p
 `zone run: sync failed (<reason code>); retrying in <n>s`. A signal stops it between syncs: a sync
 in progress finishes and is recorded, and `zone run` exits 0. A second signal exits at once.
 `--rounds N` stops after N syncs.
+
+## Notes and files
+
+```sh
+printf 'build 41 is green\n' | zone note -
+zone notes --since 1761999999000
+zone send-file report.pdf
+zone files
+zone get <id> -o report.pdf
+```
+
+`zone note -` posts stdin as a note (`zone note TEXT` takes it as an argument; at most 32 KiB).
+`zone send-file PATH` sends a file of at most 32 MiB; `--name` sets the name members see (default
+the file name) and `--mime` its media type (default `application/octet-stream`). Both seal what
+they post to the zone's member devices through the SDK before it leaves this machine, so Core
+relays ciphertext and sees only sizes and times. Each prints the posted item as one JSON line;
+`send-file` adds the `sha256` it sent.
+
+`zone notes` and `zone files` sync once and print one JSON line per item, oldest first:
+`{"id", "author", "name", "ts_ms", "mine", "text"}` for a note and
+`{"id", "author", "name", "ts_ms", "mine", "file", "mime", "size", "complete"}` for a file.
+`author` is the member's pseudonym and `name` the roster's name for it. `--since TS` keeps items
+newer than a `ts_ms` printed before. A file is `"complete": false` until all of it has arrived;
+run `zone files` again.
+
+`zone get ID -o PATH` saves a complete file. The SDK has checked it against the size and SHA-256
+the sender signed before it counts as complete. `zone get` writes it whole or not at all (a 0600
+temporary file renamed into place), refuses to replace an existing file without `--force`, and
+prints `{"id", "path", "size", "sha256"}`. `-o -` writes the file to stdout and that line to
+stderr.
 
 ## Receipts
 

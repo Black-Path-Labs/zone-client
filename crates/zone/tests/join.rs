@@ -220,7 +220,28 @@ fn a_join_address_is_resolved_at_core_and_checked_before_any_state() {
     assert_eq!(out.status.code(), Some(1), "{out:?}");
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("Core unreachable"), "{err}");
-    // A join address is not secret: no warning about the command line.
+    // A join address is a secret like an invite: on the command line it draws the warning.
+    assert!(err.contains("shell history"), "{err}");
+    // From a 0600 file: the same join, no warning.
+    let file = tmp.path().join("address");
+    std::fs::write(&file, format!("{address}\n")).unwrap();
+    std::fs::set_permissions(&file, Permissions::from_mode(0o600)).unwrap();
+    let body = format!(r#"{{"address":"{address}","zoneCode":"{code}"}}"#);
+    let (core, served) = fake_core(200, body);
+    let out = zone(
+        &tmp.path().join("zone-file"),
+        &[
+            "join",
+            "--no-wait",
+            "--core",
+            &core,
+            "--invite-file",
+            file.to_str().unwrap(),
+        ],
+    );
+    served.join().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("Core unreachable"), "{err}");
     assert!(!err.contains("shell history"), "{err}");
 
     // A code that does not hash to the address is refused, and nothing is made.
