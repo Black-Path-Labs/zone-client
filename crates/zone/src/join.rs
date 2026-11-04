@@ -27,6 +27,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use bp_workspace_core::agent_join::MAX_REQUEST_AGE_MS;
+use bp_workspace_core::magic_link;
 use bp_workspace_core::space::{is_join_address, InviteLink, ZoneCode, ZONE_CODE_PREFIX};
 use bp_zone_core::{ZoneDevice, ZoneError};
 use rand_core::{OsRng, RngCore};
@@ -133,6 +134,9 @@ pub fn run(state: &Path, opts: Options<'_>) -> Result<Outcome, String> {
     let in_person = code.starts_with(ZONE_CODE_PREFIX);
     let zone = if in_person {
         ZoneCode::decode(code)
+    } else if magic_link::is_magic_link(code) {
+        // The SDK's join checks the link's id against its secret before spending it.
+        magic_link::MagicLink::decode(code).map(|l| l.zone)
     } else {
         InviteLink::decode(code).map(|l| l.zone)
     }
@@ -172,8 +176,9 @@ pub fn run(state: &Path, opts: Options<'_>) -> Result<Outcome, String> {
     let mut backoff = Backoff::default();
     let mut request_backoff = Backoff::default();
     let mut request_due = opts.kit.is_some().then_some(Instant::now());
-    // When the last kit request went through: polled fast for FAST_WINDOW after it.
-    let mut asked: Option<Instant> = None;
+    // When the last kit request (or this run's invite redeem) went through: polled fast for
+    // FAST_WINDOW after it, on a Core that does not hold the read for a joiner.
+    let mut asked: Option<Instant> = (!in_person && !resuming).then_some(Instant::now());
     // The last sync read the mailbox (Core counts this device a member) and was not held.
     let mut read_at_once = false;
     loop {

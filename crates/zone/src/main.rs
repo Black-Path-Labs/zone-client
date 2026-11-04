@@ -11,6 +11,7 @@ mod backoff;
 mod device;
 mod items;
 mod join;
+mod links;
 mod mcp;
 mod receipts;
 mod record;
@@ -57,12 +58,13 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Join a zone with an invite link, a zone code or a join address, and wait until admitted.
-    /// Pass the invite, zone code or join address on stdin (`zone join -`) or in a file
+    /// Join a zone with a magic link, an invite link, a zone code or a join address, and wait
+    /// until admitted. Pass the link, zone code or join address on stdin (`zone join -`) or in a file
     /// (`--invite-file`), never as an argument: an argument shows in shell history and process
     /// listings. A join address is a secret: anyone who has it and a kit key can join.
     Join {
-        /// The invite link (`bpzi1.…`, or the web app's `…#join=bpzi1.…`), zone code (`bpzc1.…`)
+        /// The magic link or invite link (`…#join=bpzi2.…`, `…#join=bpzi1.…` or the bare
+        /// code), zone code (`bpzc1.…`)
         /// or join address (`za_…`), or `-` to read it from stdin. Given here it works but draws
         /// a warning.
         #[arg(
@@ -203,6 +205,14 @@ enum Command {
         #[command(subcommand)]
         command: RoomCommand,
     },
+    /// Invite one person with a magic link, or revoke one (`zone link new`, `zone link revoke`).
+    Link {
+        #[command(subcommand)]
+        command: LinkCommand,
+    },
+    /// Print the zone's magic links as JSON lines: id, label, state (open, used, revoked or
+    /// expired), times, and the member a used link admitted.
+    Links,
     /// Serve MCP on stdio, bridged to a hosted zone MCP server (`zone mcp login URL` first).
     Mcp {
         #[command(subcommand)]
@@ -322,6 +332,30 @@ enum RoomCommand {
         /// otherwise no consent is given.
         #[arg(long, value_name = "ANSWER", value_parser = ["yes", "no"])]
         consent_record: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum LinkCommand {
+    /// Make a one-time join link for one person (the zone's owner, or a device granted
+    /// invite-people). Prints `{link_id, expires_at}`; the link itself goes only to --out. Whoever
+    /// opens the link first joins, so send it to that person alone.
+    New {
+        /// Who the link is for (1 to 120 bytes), shown in `zone links`.
+        #[arg(long = "for", value_name = "LABEL")]
+        label: String,
+        /// How long the link lasts: Ns, Nm or Nh, 1m to 24h.
+        #[arg(long, value_name = "TTL", default_value = "15m", value_parser = links::parse_ttl)]
+        ttl: u64,
+        /// Write the link to a new file PATH (mode 0600), or `-` for stdout (the JSON line then
+        /// goes to stderr).
+        #[arg(long, value_name = "PATH", default_value = "-")]
+        out: PathBuf,
+    },
+    /// Revoke an unused link. A used link stays used: remove the member it admitted instead.
+    Revoke {
+        /// The link's id (`ml_…`), from `zone links`.
+        link_id: String,
     },
 }
 
@@ -551,6 +585,22 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
                     },
                 )?,
             }
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Link {
+            command: LinkCommand::New { label, ttl, out },
+        } => {
+            links::new(&state, &label, ttl, &out)?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Link {
+            command: LinkCommand::Revoke { link_id },
+        } => {
+            links::revoke(&state, &link_id)?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Links => {
+            links::list(&state)?;
             Ok(ExitCode::SUCCESS)
         }
         Command::Mcp { command: None } => {
