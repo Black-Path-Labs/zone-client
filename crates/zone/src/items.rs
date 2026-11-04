@@ -74,7 +74,7 @@ pub fn recipients(cmd: &str, to: Vec<String>) -> Result<Vec<String>, String> {
     for p in to {
         let p = p.trim();
         if p.is_empty() {
-            return Err(format!("{cmd}: --to is empty"));
+            return Err(format!("{cmd}: a pseudonym is empty"));
         }
         if !out.iter().any(|q| q == p) {
             out.push(p.to_owned());

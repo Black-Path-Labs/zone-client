@@ -17,6 +17,7 @@ mod record;
 mod run;
 mod secret;
 mod state;
+mod stream;
 mod transport;
 mod vault;
 mod view;
@@ -158,6 +159,12 @@ enum Command {
         /// the whole zone.
         #[arg(long = "to", value_name = "PSEUDONYM")]
         to: Vec<String>,
+        /// Send it live over a stream to this member, who runs `zone stream offer`. Any size;
+        /// both must be online.
+        #[arg(long, value_name = "PSEUDONYM", conflicts_with = "to")]
+        live: Option<String>,
+        #[command(flatten)]
+        sip: stream::SipArgs,
     },
     /// Sync once and print the inbox's files as JSON lines, oldest first, with the receipts
     /// members signed for the files this device sent.
@@ -184,6 +191,11 @@ enum Command {
         #[arg(long)]
         no_receipt: bool,
     },
+    /// Stream bytes or media between two members, end to end, with a signed receipt each side.
+    Stream {
+        #[command(subcommand)]
+        command: StreamCommand,
+    },
     /// Serve MCP on stdio, bridged to a hosted zone MCP server (`zone mcp login URL` first).
     Mcp {
         #[command(subcommand)]
@@ -203,6 +215,44 @@ enum McpCommand {
         /// Stop waiting for the consent after SECS.
         #[arg(long, value_name = "SECS", default_value_t = 900)]
         timeout: u64,
+    },
+}
+
+#[derive(Subcommand)]
+enum StreamCommand {
+    /// Publish this device's stream and answer one caller: a bytes stream goes to stdout, an rtp
+    /// stream to `--record DIR`. Prints the receipt as one JSON line at the end (on stderr for
+    /// bytes, whose stdout is the stream).
+    Offer {
+        /// Admit only this pseudonym; repeat for more. Without it any member may call.
+        #[arg(long, value_name = "PSEUDONYM")]
+        allow: Vec<String>,
+        #[arg(long, value_enum, default_value_t = stream::Mode::Bytes)]
+        mode: stream::Mode,
+        /// rtp: write the received audio (`audio.opus`) and video (`video.ivf`) into DIR.
+        #[arg(long, value_name = "DIR")]
+        record: Option<PathBuf>,
+        #[command(flatten)]
+        sip: stream::SipArgs,
+    },
+    /// Call PSEUDONYM's stream and send stdin (bytes) or `--audio`/`--video` (rtp). Prints the
+    /// receipt as one JSON line at the end.
+    Open {
+        /// The member whose stream to open.
+        member: String,
+        #[arg(long, value_enum, default_value_t = stream::Mode::Bytes)]
+        mode: stream::Mode,
+        /// A capability-call quote id, for a paid stream.
+        #[arg(long, value_name = "ID")]
+        quote: Option<String>,
+        /// rtp: Ogg Opus audio from a file, or `exec:PROGRAM ARGS` whose stdout is Ogg Opus.
+        #[arg(long, value_name = "SRC")]
+        audio: Option<String>,
+        /// rtp: IVF VP8 video from a file, or `exec:PROGRAM ARGS` whose stdout is IVF.
+        #[arg(long, value_name = "SRC")]
+        video: Option<String>,
+        #[command(flatten)]
+        sip: stream::SipArgs,
     },
 }
 
@@ -340,9 +390,20 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
         }
         Command::SendFile {
             path,
+            live: Some(member),
+            sip,
+            ..
+        } => {
+            stream::send_live(&state, member, &path, &sip)?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::SendFile {
+            path,
             name,
             mime,
             to,
+            live: None,
+            sip: _,
         } => {
             items::send_file(&state, &path, name, mime, to)?;
             Ok(ExitCode::SUCCESS)
@@ -358,6 +419,32 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
             no_receipt,
         } => {
             items::get(&state, &id, &output, force, !no_receipt)?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Stream {
+            command:
+                StreamCommand::Offer {
+                    allow,
+                    mode,
+                    record,
+                    sip,
+                },
+        } => {
+            stream::offer(&state, allow, mode, record, &sip)?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Stream {
+            command:
+                StreamCommand::Open {
+                    member,
+                    mode,
+                    quote,
+                    audio,
+                    video,
+                    sip,
+                },
+        } => {
+            stream::open(&state, member, mode, quote, audio, video, &sip)?;
             Ok(ExitCode::SUCCESS)
         }
         Command::Mcp { command: None } => {
