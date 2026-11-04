@@ -1,6 +1,7 @@
 #!/bin/sh
 # Before anything leaves this machine: the tree is free of internal names, and so is every
-# commit being pushed (author, committer, message and diff).
+# commit being pushed (author, committer, message and diff). Commits a remote already has have
+# left before and are not checked again, so merging main into a branch does not trip on them.
 # Installed by scripts/setup-git-identity.sh (core.hooksPath=.githooks).
 set -eu
 
@@ -13,6 +14,6 @@ while read -r _local_ref local_sha _remote_ref remote_sha; do
     # A new branch: check what no remote-tracking branch already has.
     "${check}" "--commits=${local_sha} --not --remotes"
   else
-    "${check}" "--commits=${remote_sha}..${local_sha}"
+    "${check}" "--commits=${remote_sha}..${local_sha} --not --remotes"
   fi
 done
