@@ -192,7 +192,7 @@ dependencies = [
 [[package]]
 name = "bp-workspace-core"
 version = "0.1.0"
-source = "git+https://github.com/Black-Path-Labs/zone-sdk?rev=8cb50cc7584b7b47f6d2a15345703b255cf0b571#8cb50cc7584b7b47f6d2a15345703b255cf0b571"
+source = "git+https://github.com/Black-Path-Labs/zone-sdk?rev=1623ebd4fad6eb7fc104ecaa7b451f1f71fd7bec#1623ebd4fad6eb7fc104ecaa7b451f1f71fd7bec"
 dependencies = [
  "aes-gcm",
  "base64",
@@ -209,7 +209,7 @@ dependencies = [
 [[package]]
 name = "bp-zone-core"
 version = "0.1.0"
-source = "git+https://github.com/Black-Path-Labs/zone-sdk?rev=8cb50cc7584b7b47f6d2a15345703b255cf0b571#8cb50cc7584b7b47f6d2a15345703b255cf0b571"
+source = "git+https://github.com/Black-Path-Labs/zone-sdk?rev=1623ebd4fad6eb7fc104ecaa7b451f1f71fd7bec#1623ebd4fad6eb7fc104ecaa7b451f1f71fd7bec"
 dependencies = [
  "bp-workspace-core",
  "bp-zone-rtc",
@@ -224,7 +224,7 @@ dependencies = [
 [[package]]
 name = "bp-zone-rtc"
 version = "0.1.0"
-source = "git+https://github.com/Black-Path-Labs/zone-sdk?rev=8cb50cc7584b7b47f6d2a15345703b255cf0b571#8cb50cc7584b7b47f6d2a15345703b255cf0b571"
+source = "git+https://github.com/Black-Path-Labs/zone-sdk?rev=1623ebd4fad6eb7fc104ecaa7b451f1f71fd7bec#1623ebd4fad6eb7fc104ecaa7b451f1f71fd7bec"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -622,7 +622,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1281,7 +1281,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1594,7 +1594,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
