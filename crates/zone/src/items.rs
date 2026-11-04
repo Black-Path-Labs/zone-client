@@ -158,6 +158,11 @@ pub fn note(state: &Path, text: Option<String>, to: Vec<String>) -> Result<(), S
         }
     };
     let text = note_text(raw)?;
+    // A slash command is answered here and never sent; `//` sends one slash.
+    let text = match bp_zone_core::commands::parse(&text) {
+        bp_zone_core::commands::Parsed::Text(t) => t,
+        _ => return crate::slash::run(state, &text),
+    };
     // A running `zone run` seals and pushes it over its live session, with no sync first.
     if let Some(item) = crate::live::send_note(state, &text, &to)? {
         println!("{item}");

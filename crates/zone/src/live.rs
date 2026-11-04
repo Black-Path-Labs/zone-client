@@ -11,6 +11,11 @@
 //! then posts it to Core. No sync and no challenge stand before the push. Without a running
 //! `zone run`, `zone note` posts over HTTP as before.
 //!
+//! Presence: once registered, the session PUBLISHes this device's signed presence tuple to the
+//! zone's AOR and SUBSCRIBEs to the zone's presence, both refreshed with the registration. Each NOTIFY replaces the SDK's view, which
+//! `zone who` reads through `live.sock` (`{"cmd": LINE}`); the view is cleared when the session
+//! drops.
+//!
 //! The edge sees the zone's address, sealed bytes, sizes and timing; nothing here logs a body.
 
 use std::collections::HashMap;
@@ -61,6 +66,8 @@ const PUSH_WAIT: Duration = Duration::from_secs(2);
 const NOTE_WAIT: Duration = Duration::from_secs(30);
 const USER_AGENT: &str = "zone-cli";
 const SOCKET: &str = "live.sock";
+/// How long a withdrawn (closed) publication lingers at the edge before it lapses.
+const WITHDRAW_EXPIRES: u32 = 5;
 
 /// Where `zone run`'s live session connects. Without `--sip-ws` (or `ZONE_SIP_WS`) there is none.
 #[derive(clap::Args, Clone)]
@@ -123,6 +130,8 @@ pub struct Live {
     out: Mutex<mpsc::Sender<Push>>,
     /// Set on every (re)registration and after a pushed roster: the run loop syncs once.
     catch_up: AtomicBool,
+    /// The session's thread has returned (after its clean stop).
+    ended: AtomicBool,
 }
 
 impl Live {
@@ -133,10 +142,22 @@ impl Live {
             up: AtomicBool::new(false),
             out: Mutex::new(tx),
             catch_up: AtomicBool::new(false),
+            ended: AtomicBool::new(false),
         });
         let l = Arc::clone(&live);
-        std::thread::spawn(move || session(&device, &args, &l, &rx));
+        std::thread::spawn(move || {
+            session(&device, &args, &l, &rx);
+            l.ended.store(true, Ordering::SeqCst);
+        });
         live
+    }
+
+    /// Once stopped: wait up to `max` for the session to withdraw and unregister.
+    pub fn wait_ended(&self, max: Duration) {
+        let until = Instant::now() + max;
+        while !self.ended.load(Ordering::SeqCst) && Instant::now() < until {
+            std::thread::sleep(POLL);
+        }
     }
 
     /// True once: the run loop should sync now (a registration came up, or a roster arrived).
@@ -172,6 +193,7 @@ fn session(device: &ZoneDevice, args: &LiveArgs, live: &Live, rx: &mpsc::Receive
     while !run::stopped() {
         let result = serve(device, args, live, rx);
         live.up.store(false, Ordering::SeqCst);
+        device.clear_presence();
         let Err(e) = result else { return };
         let wait = backoff.failed("live", OsRng.next_u64());
         // One line per outage, not one per retry.
@@ -271,11 +293,15 @@ fn serve(
     live.up.store(true, Ordering::SeqCst);
     live.catch_up.store(true, Ordering::SeqCst);
     trace("live: registered");
+    let mut presence = Presence::default();
+    presence.publish(device, &mut ws, &leg, &aor, &edge.domain)?;
+    presence.subscribe(&mut ws, &leg, &aor)?;
     let mut refresh = Instant::now() + REFRESH;
     let mut ping = Instant::now() + KEEPALIVE;
     let mut waiting: HashMap<String, (mpsc::Sender<u16>, Instant)> = HashMap::new();
     loop {
         if run::stopped() {
+            presence.withdraw(device, &mut ws, &leg, &aor, &edge.domain);
             let _ = send(&mut ws, leg.register(&creds, 0, USER_AGENT));
             let _ = ws.close(None);
             return Ok(());
@@ -291,6 +317,8 @@ fn serve(
                 .sip_credentials(edge.domain.clone())
                 .map_err(|e| format!("credentials: {}", crate::join::kind(&e)))?;
             send(&mut ws, leg.register(&fresh, EXPIRES, USER_AGENT))?;
+            presence.publish(device, &mut ws, &leg, &aor, &edge.domain)?;
+            presence.subscribe(&mut ws, &leg, &aor)?;
             refresh = now + REFRESH;
         }
         if now >= ping {
@@ -304,6 +332,10 @@ fn serve(
             let call_id = m.header("Call-ID").unwrap_or_default();
             if call_id == leg.register_call_id() && code >= 300 {
                 return Err(format!("the edge refused the refresh ({code})"));
+            }
+            if presence.answered(&m, code) {
+                presence.publish(device, &mut ws, &leg, &aor, &edge.domain)?;
+                continue;
             }
             if code >= 200 {
                 if let Some((done, _)) = waiting.remove(call_id) {
@@ -332,6 +364,16 @@ fn take(device: &ZoneDevice, live: &Live, ws: &mut Socket, m: &Message) -> Resul
         Some("INVITE") => return send(ws, answer(m, 480, "Temporarily Unavailable")),
         _ => send(ws, answer(m, 200, "OK"))?,
     }
+    if let Some(doc) = m.presence_body() {
+        match device.take_presence(doc.to_owned()) {
+            Ok(n) => trace(&format!("live: presence, {n} devices")),
+            Err(e) => trace(&format!(
+                "live: presence not read ({})",
+                crate::join::kind(&e)
+            )),
+        }
+        return Ok(());
+    }
     let Some(body) = m.live_body() else {
         return Ok(());
     };
@@ -349,6 +391,88 @@ fn take(device: &ZoneDevice, live: &Live, ws: &mut Socket, m: &Message) -> Resul
         Err(e) => trace(&format!("live: not applied ({})", crate::join::kind(&e))),
     }
     Ok(())
+}
+
+/// This session's presence publication and subscription.
+#[derive(Default)]
+struct Presence {
+    /// The edge's `SIP-ETag` for the publication, once it took one.
+    etag: Option<String>,
+    publish_call_id: String,
+    subscribe_call_id: String,
+}
+
+impl Presence {
+    /// Publish (or refresh, with the etag) this device's signed tuple.
+    fn publish(
+        &mut self,
+        device: &ZoneDevice,
+        ws: &mut Socket,
+        leg: &LiveLeg,
+        aor: &str,
+        domain: &str,
+    ) -> Result<(), String> {
+        let body = match device.presence_body(domain.to_owned()) {
+            Ok(b) => b,
+            Err(e) => {
+                trace(&format!("live: no presence ({})", crate::join::kind(&e)));
+                return Ok(());
+            }
+        };
+        let (raw, call_id) = leg.publish(aor, &body, EXPIRES, self.etag.as_deref());
+        self.publish_call_id = call_id;
+        send(ws, raw)
+    }
+
+    /// A new subscription; the one before lapses on its own.
+    fn subscribe(&mut self, ws: &mut Socket, leg: &LiveLeg, aor: &str) -> Result<(), String> {
+        let (raw, call_id) = leg.subscribe(aor, EXPIRES);
+        self.subscribe_call_id = call_id;
+        send(ws, raw)
+    }
+
+    /// Take a final answer to one of ours. True when the publication must start over (the
+    /// edge no longer knows its etag).
+    fn answered(&mut self, m: &Message, code: u16) -> bool {
+        let call_id = m.header("Call-ID").unwrap_or_default();
+        if code < 200 {
+            return false;
+        }
+        if call_id == self.publish_call_id {
+            self.publish_call_id.clear();
+            if (200..300).contains(&code) {
+                self.etag = m.header("SIP-ETag").map(str::to_owned);
+            } else if code == 412 && self.etag.is_some() {
+                self.etag = None;
+                return true;
+            } else {
+                trace(&format!("live: the edge refused presence ({code})"));
+            }
+        } else if call_id == self.subscribe_call_id && code >= 300 {
+            trace(&format!(
+                "live: the edge refused the presence subscription ({code})"
+            ));
+        }
+        false
+    }
+
+    /// On a clean stop: publish a closed tuple over the etag, which watchers see at once, and
+    /// let it lapse in [`WITHDRAW_EXPIRES`]; then end the subscription. An `Expires: 0` alone
+    /// leaves the tuple in the edge's NOTIFY, so watchers would see the device until it expired.
+    fn withdraw(
+        &self,
+        device: &ZoneDevice,
+        ws: &mut Socket,
+        leg: &LiveLeg,
+        aor: &str,
+        domain: &str,
+    ) {
+        if let (Some(etag), Ok(body)) = (&self.etag, device.presence_closed_body(domain.to_owned()))
+        {
+            let _ = send(ws, leg.publish(aor, &body, WITHDRAW_EXPIRES, Some(etag)).0);
+        }
+        let _ = send(ws, leg.subscribe(aor, 0).0);
+    }
 }
 
 /// The note socket's path in `state`.
@@ -404,6 +528,12 @@ fn answer_note(conn: UnixStream, device: &ZoneDevice, live: &Live) -> std::io::R
     BufReader::new(&conn).read_line(&mut line)?;
     let start = Instant::now();
     let reply = match serde_json::from_str::<Value>(&line) {
+        Ok(req) if req["cmd"].is_string() => {
+            match device.run_command(req["cmd"].as_str().unwrap_or_default().to_owned()) {
+                Ok(r) => crate::slash::wire(r),
+                Err(e) => json!({"ok": false, "text": format!("{} ({e})", crate::join::kind(&e))}),
+            }
+        }
         Ok(req) => {
             let text = req["note"].as_str().unwrap_or_default().to_owned();
             let to = req["to"]
@@ -487,6 +617,28 @@ pub fn send_note(state: &Path, text: &str, to: &[String]) -> Result<Option<Value
         .as_str()
         .unwrap_or("note: `zone run` refused the note")
         .to_owned())
+}
+
+#[cfg(unix)]
+/// A slash command through a running `zone run`: its answer, or None when no run answers.
+pub fn ask_command(state: &Path, line: &str) -> Result<Option<Value>, String> {
+    let Ok(mut conn) = UnixStream::connect(socket_path(state)) else {
+        return Ok(None);
+    };
+    let _ = conn.set_read_timeout(Some(NOTE_WAIT));
+    writeln!(conn, "{}", json!({"cmd": line})).map_err(|e| format!("command: {e}"))?;
+    let mut answer = String::new();
+    BufReader::new(&conn)
+        .read_line(&mut answer)
+        .map_err(|e| format!("command: no answer from `zone run` ({})", e.kind()))?;
+    serde_json::from_str(&answer)
+        .map(Some)
+        .map_err(|_| "command: `zone run` answered nothing readable".into())
+}
+
+#[cfg(not(unix))]
+pub fn ask_command(_: &Path, _: &str) -> Result<Option<Value>, String> {
+    Ok(None)
 }
 
 /// Windows has no unix socket here: `zone note` posts over HTTP, and the live session still

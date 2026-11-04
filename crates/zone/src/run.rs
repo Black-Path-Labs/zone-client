@@ -139,6 +139,10 @@ pub fn run(state: &Path, rounds: Option<u32>, live_args: LiveArgs) -> Result<(),
     }
     record.next_sync_ms = None;
     record.save(state)?;
+    // Let the session withdraw its presence and unregister before the process ends.
+    if let Some((l, _)) = &session {
+        l.wait_ended(Duration::from_secs(2));
+    }
     eprintln!("zone run: stopped");
     Ok(())
 }
