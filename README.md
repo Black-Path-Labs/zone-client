@@ -298,6 +298,26 @@ A note that starts with `/` is a command: `zone note "/whois aly"` answers it he
 nothing. Start a note with `//` to post a leading slash (`zone note "//shrug"` posts `/shrug`).
 `zone mcp` offers the same commands as local tools (`zone_who`, `zone_whois`, … `zone_help`).
 
+## First run: three questions
+
+Once `zone join` sees this device admitted, it prints the zone rep's first question. There are
+three: what you want to do in the zone, your name or handle, and what you bring or want. Each is
+skippable, and nothing they ask adds to the join.
+
+```sh
+zone onboard ship a podcast   # answer the current question
+zone onboard skip             # skip this one; `zone onboard skip all` ends the questions
+zone onboard yes              # publish the draft profile it shows; anything else publishes nothing
+zone onboard                  # start the questions again
+zone profile                  # your published profile; `zone profile off` withdraws it
+```
+
+The answers stay on this device until you say yes to the exact draft. Then the profile goes to
+the zone's members, sealed like a note. Either way, the last answer prints something useful to
+start with: matching capabilities when you said what you need, else who is online and the latest
+notes, plus two commands to try. Through `zone mcp` the same steps are the `zone_onboard` tool
+(`answer`) and `zone_profile` (`off`); a host passes on the member's own words, never its own.
+
 ## Notes and files
 
 ```sh

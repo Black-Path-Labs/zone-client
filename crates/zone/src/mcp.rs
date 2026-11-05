@@ -657,8 +657,22 @@ fn slash_tools() -> Vec<Value> {
                     json!({"capability": {"type": "string", "description": "A capability kind, id or tag"}}),
                     json!(["capability"]),
                 ),
+                "note" => (
+                    json!({"text": {"type": "string", "description": "The note to post"}}),
+                    json!(["text"]),
+                ),
+                "onboard" => (
+                    json!({"answer": {"type": "string", "description": "The member's own answer to the current step, word for word: text, skip or skip all for a question; yes or no for the draft. Omit to start the questions again. Never answer for the member."}}),
+                    json!([]),
+                ),
+                "profile" => (
+                    json!({"off": {"type": "boolean", "description": "Withdraw the member's profile"}}),
+                    json!([]),
+                ),
                 _ => (json!({}), json!([])),
             };
+            // These write in the member's name: a note, a profile on yes, a withdrawal.
+            let writes = matches!(c.name, "note" | "onboard" | "profile" | "rep");
             json!({
                 "name": format!("zone_{}", c.name),
                 "description": format!(
@@ -668,7 +682,7 @@ fn slash_tools() -> Vec<Value> {
                     if c.core { "" } else { "; reads local state only" }
                 ),
                 "inputSchema": {"type": "object", "properties": props, "required": required},
-                "annotations": {"readOnlyHint": true, "openWorldHint": c.core},
+                "annotations": {"readOnlyHint": !writes, "openWorldHint": c.core},
             })
         })
         .collect()
@@ -683,6 +697,9 @@ fn local_line(params: &Value) -> Option<String> {
         "price" => params["arguments"]["capability"]
             .as_str()
             .unwrap_or_default(),
+        "note" => params["arguments"]["text"].as_str().unwrap_or_default(),
+        "onboard" => params["arguments"]["answer"].as_str().unwrap_or_default(),
+        "profile" if params["arguments"]["off"] == json!(true) => "off",
         _ => "",
     };
     Some(format!("/{} {arg}", spec.name).trim_end().to_owned())
@@ -959,6 +976,31 @@ mod tests {
             line("zone_price", json!({"capability": "inference"})).as_deref(),
             Some("/price inference")
         );
+        assert_eq!(
+            line("zone_onboard", json!({"answer": "skip all"})).as_deref(),
+            Some("/onboard skip all")
+        );
+        assert_eq!(line("zone_onboard", json!({})).as_deref(), Some("/onboard"));
+        assert_eq!(
+            line("zone_profile", json!({"off": true})).as_deref(),
+            Some("/profile off")
+        );
+        assert_eq!(line("zone_profile", json!({})).as_deref(), Some("/profile"));
+        assert_eq!(
+            line("zone_note", json!({"text": "hi"})).as_deref(),
+            Some("/note hi")
+        );
+        // A tool that can publish in the member's name is not marked read-only.
+        for t in &tools {
+            let writes = ["zone_note", "zone_onboard", "zone_profile", "zone_rep"]
+                .contains(&t["name"].as_str().unwrap());
+            assert_eq!(
+                t["annotations"]["readOnlyHint"],
+                json!(!writes),
+                "{}",
+                t["name"]
+            );
+        }
         assert_eq!(line("zone_join", json!({})), None, "a hosted tool goes on");
     }
 
@@ -970,7 +1012,10 @@ mod tests {
         assert_eq!(r["result"]["protocolVersion"], "2025-03-26");
         let list = json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"});
         let r = answer_locally(tmp.path(), &list, false).unwrap().unwrap();
-        assert_eq!(r["result"]["tools"].as_array().unwrap().len(), 8 + 4);
+        assert_eq!(
+            r["result"]["tools"].as_array().unwrap().len(),
+            commands::COMMANDS.len() + 4
+        );
         let note = json!({"jsonrpc": "2.0", "method": "notifications/initialized"});
         assert_eq!(answer_locally(tmp.path(), &note, false), Some(None));
         // With a hosted server, only the local tools' calls stay here.
