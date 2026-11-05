@@ -71,6 +71,11 @@ pub fn sdk_error(cmd: &str, e: &ZoneError) -> String {
             "{cmd}: refused (relay-quota): the relay needs {need} bytes (the file once per \
              recipient device) and has {have} free; nothing was sent"
         ),
+        // Core's own code, detail.reason and message: a bare `core-403` cannot say which guard
+        // refused, and Core does not log 4xx refusals, so this line is the only record.
+        ZoneError::Core { status, reason } if *status != 0 => {
+            format!("{cmd}: refused ({}): {reason}", join::kind(e))
+        }
         e => format!("{cmd}: refused ({})", join::kind(e)),
     }
 }
