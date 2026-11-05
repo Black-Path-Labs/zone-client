@@ -15,7 +15,6 @@ path = "src/main.rs"
 [dependencies]
 bp-workspace-core.workspace = true
 bp-zone-core.workspace = true
-bp-zone-fs.workspace = true
 bp-zone-rtc.workspace = true
 aes-gcm = "0.10"
 clap = { version = "4.5", features = ["derive", "env"] }
@@ -33,6 +32,11 @@ zeroize = "1"
 # no libfuse headers to build.
 [target.'cfg(target_os = "linux")'.dependencies]
 fuser = { version = "0.18", default-features = false }
+
+# `zone fs` and `zone share`: bp-zone-fs uses Unix file metadata and process groups, so the
+# Windows build leaves both commands out.
+[target.'cfg(unix)'.dependencies]
+bp-zone-fs.workspace = true
 
 [dev-dependencies]
 tempfile = "3"
