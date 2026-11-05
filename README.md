@@ -410,6 +410,7 @@ zone fs <agent> grep -t rust 'fn main' core/
 zone fs <agent> find mod.rs core/
 zone fs <agent> symbols verify_jwt core/
 zone fs <agent> mount ~/mnt/core core/                    # read-only, until Ctrl+C
+zone fs <agent> semantic 'retry with backoff' core/       # only if the owner runs a local model
 ```
 
 A member exports a directory under a label and grants other members access to path prefixes of

@@ -64,7 +64,8 @@ pub enum FsCommand {
         /// Path prefixes inside the export (repeatable; default the whole export).
         #[arg(long = "path", value_name = "PREFIX")]
         paths: Vec<String>,
-        /// Operations: metadata, read, grep, find, symbols, mount, patch (comma-separated).
+        /// Operations: metadata, read, grep, find, symbols, semantic, mount, patch
+        /// (comma-separated).
         /// `patch` lets the member send signed patches to your inbox (`zone fs inbox`).
         #[arg(long, value_delimiter = ',', default_value = "metadata,read,grep,find")]
         ops: Vec<String>,
@@ -224,6 +225,19 @@ enum Op {
         exact: bool,
         #[arg(long, short = 'i')]
         ignore_case: bool,
+    },
+    /// Windows nearest to QUERY by meaning, from the owner's local embedding model (when the
+    /// owner runs one; otherwise `fs-index-unavailable`). No LLM, nothing leaves their host but
+    /// the ranked paths, lines and short snippets your grant allows.
+    Semantic {
+        query: String,
+        #[arg(default_value = "")]
+        path: String,
+        /// How many results (at most 100).
+        #[arg(long, default_value_t = 10)]
+        top: u64,
+        #[arg(long)]
+        json: bool,
     },
     /// Send a patch to the agent's inbox for export LABEL, signed by this device. Needs a live
     /// grant naming `patch`. The owner reviews it with its own checks; nothing is applied here.
@@ -1033,6 +1047,30 @@ fn op(client: &FsClient, op: Op) -> Result<(), String> {
             }
             Ok(())
         }
+        Op::Semantic {
+            query,
+            path,
+            top,
+            json: as_json,
+        } => {
+            let a = bp_zone_fs::semantic::SemanticArgs { query, top_k: top };
+            let (hits, _) = client.semantic(&path, &a).map_err(|e| refusal(&e))?;
+            for h in hits {
+                if as_json {
+                    println!("{}", h.to_json());
+                } else {
+                    println!(
+                        "{}:{}-{}: {:.3} {}",
+                        clean(&h.path),
+                        h.start_line,
+                        h.end_line,
+                        h.score,
+                        clean(h.snippet.lines().next().unwrap_or_default())
+                    );
+                }
+            }
+            Ok(())
+        }
         Op::Mount { .. } | Op::Patch { .. } | Op::Ask { .. } => {
             Err("zone fs: handled by the caller".into())
         }
@@ -1704,6 +1742,16 @@ mod tests {
             TargetCli::try_parse_from(["aly", "patch", "core", "fix.diff"]).is_err(),
             "a patch names its base"
         );
+        let c = TargetCli::try_parse_from([
+            "aly",
+            "semantic",
+            "retry with backoff",
+            "core",
+            "--top",
+            "3",
+        ])
+        .unwrap();
+        assert!(matches!(c.op, Op::Semantic { ref path, top: 3, .. } if path == "core"));
         let c = TargetCli::try_parse_from(["aly", "ask", "core", "which retry policy?"]).unwrap();
         assert!(matches!(c.op, Op::Ask { ref question, .. } if question == "which retry policy?"));
 
