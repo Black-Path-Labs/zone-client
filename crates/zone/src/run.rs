@@ -107,7 +107,7 @@ pub fn run(state: &Path, rounds: Option<u32>, live_args: LiveArgs) -> Result<(),
                 }
                 // A direct note that arrived is delivered once this device holds it: sign for it.
                 // (A read receipt waits for `zone notes`, where the person looks.)
-                crate::items::acknowledge(&device, false);
+                crate::items::acknowledge(&device, false, None);
                 backoff.succeeded();
                 None
             }

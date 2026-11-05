@@ -226,9 +226,6 @@ pub fn list(
         ItemKind::File => "files",
     };
     let device = joined(state, cmd)?;
-    if kind == ItemKind::Note {
-        acknowledge(&device, true);
-    }
     let mut items = select(device.inbox(), kind.clone(), since);
     if let Some(secs) = wait.filter(|_| since.is_none() || items.is_empty()) {
         // Only items that arrive from now on end the wait; ids, since clocks differ.
@@ -252,6 +249,14 @@ pub fn list(
             }
         }
     }
+    if kind == ItemKind::Note {
+        // Receipts go only for the notes this listing shows (after since, quiet and wait).
+        acknowledge(
+            &device,
+            true,
+            Some(items.iter().map(|i| i.id.clone()).collect()),
+        );
+    }
     let mut out = std::io::stdout().lock();
     for i in items {
         let mut line = item_line(&i);
@@ -268,9 +273,10 @@ pub fn list(
 
 /// Send the receipts due for direct and group notes: `delivered` always, `read` too when `read`
 /// is set and this person turned read receipts on (`zone receipts read on`). A failure is a
-/// warning, never the command's: the next sync tries again, and each receipt goes once.
-pub fn acknowledge(device: &ZoneDevice, read: bool) {
-    if let Err(e) = device.acknowledge_notes(read) {
+/// warning, never the command's: the next sync tries again, and each receipt goes once. With
+/// `only`, just those note ids are acknowledged.
+pub fn acknowledge(device: &ZoneDevice, read: bool, only: Option<Vec<String>>) {
+    if let Err(e) = device.acknowledge_notes(read, only) {
         if !matches!(e, ZoneError::NotAdmitted) {
             eprintln!("zone: note receipts not sent ({})", join::kind(&e));
         }
