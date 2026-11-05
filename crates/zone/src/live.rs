@@ -72,7 +72,8 @@ const WITHDRAW_EXPIRES: u32 = 5;
 /// Where `zone run`'s live session connects. Without `--sip-ws` (or `ZONE_SIP_WS`) there is none.
 #[derive(clap::Args, Clone)]
 pub struct LiveArgs {
-    /// The zone's SIP edge over WebSocket (`wss://…`), for the live session.
+    /// The zone's SIP edge over WebSocket (`wss://…`), for the live session. `ws://` is refused
+    /// except to a loopback host: it would carry this device's sign-in in the clear.
     #[arg(long, env = "ZONE_SIP_WS", value_name = "URL")]
     pub sip_ws: Option<String>,
     /// The zone's SIP domain, for the live session's registration (default: the zone service's
@@ -101,8 +102,19 @@ impl LiveArgs {
         !self.no_live && self.sip_ws.is_some()
     }
 
+    /// The REGISTER carries this device's bearer and proof: `--sip-ws` must be wss:// (ws:// to
+    /// a loopback host, a local test edge, alone).
+    pub fn check(&self) -> Result<(), String> {
+        match &self.sip_ws {
+            Some(ws) => bp_zone_core::sip_transport::check_live_url(ws)
+                .map_err(|e| format!("--sip-ws: {e}")),
+            None => Ok(()),
+        }
+    }
+
     fn edge(&self, device: &ZoneDevice) -> Result<Edge, String> {
         let ws = self.sip_ws.clone().ok_or("no --sip-ws")?;
+        self.check()?;
         let core = url::Url::parse(&device.status().core_url).ok();
         let domain = match (&self.sip_domain, core.as_ref().and_then(|u| u.host_str())) {
             (Some(d), _) => d.clone(),

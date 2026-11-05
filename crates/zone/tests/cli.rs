@@ -110,6 +110,37 @@ fn members_and_grants_before_any_join_fail_and_make_no_state() {
 }
 
 #[test]
+fn run_refuses_a_plaintext_live_edge_before_anything_else() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = tmp.path().join("zone");
+    // The REGISTER carries the device's bearer and proof: ws:// off loopback is refused at once,
+    // not retried, and before any state is read.
+    for edge in ["ws://sip.example", "ws://192.0.2.1:80", "sip.example:5060"] {
+        let out = zone_in(&state, &["run", "--rounds", "1", "--sip-ws", edge]);
+        assert_eq!(out.status.code(), Some(1), "{edge}: {out:?}");
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            err.contains("--sip-ws") && err.contains("wss://"),
+            "{edge}: {err}"
+        );
+    }
+    // `--no-live` turns the session off, so the URL is not looked at.
+    let out = zone_in(
+        &state,
+        &[
+            "run",
+            "--rounds",
+            "1",
+            "--no-live",
+            "--sip-ws",
+            "ws://sip.example",
+        ],
+    );
+    assert!(String::from_utf8_lossy(&out.stderr).contains("run `zone join` first"));
+    assert!(!state.exists());
+}
+
+#[test]
 fn run_before_any_join_fails_and_makes_no_state() {
     let tmp = tempfile::tempdir().unwrap();
     let state = tmp.path().join("zone");
