@@ -392,8 +392,10 @@ them), `receipt` (this device's signed receipt), and `peer_receipt` and `peer_ag
 other side's receipt arrived and checked out (`peer_refused` says why one did not). `offer` in
 bytes mode prints it on stderr, since stdout carries the stream.
 
-The SIP edge the stream goes through defaults to the zone service's host, port 5060.
-`--sip-server HOST:PORT` and `--sip-domain DOMAIN` set it when the zone's owner names another.
+The SIP edge the stream goes through is the one the SIP domain's `_sip._udp` SRV record names
+(the domain defaults to the zone service's host). With no such record it is the zone service's
+host, port 5060. `--sip-server HOST:PORT` and `--sip-domain DOMAIN` (or `ZONE_SIP_SERVER` and
+`ZONE_SIP_DOMAIN`) set it when the zone's owner names another.
 
 ## Source trees (zone fs)
 

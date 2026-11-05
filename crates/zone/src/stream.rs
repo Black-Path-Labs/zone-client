@@ -34,10 +34,12 @@ const SIP_PORT: u16 = 5060;
 /// How much of stdin goes into one `send`.
 const CHUNK: usize = 64 * 1024;
 
-/// Where the zone's SIP edge is. Both default to the host of the zone service the device uses.
+/// Where the zone's SIP edge is. The domain defaults to the host of the zone service the device
+/// uses, the server to what that domain's `_sip._udp` SRV record names.
 #[derive(clap::Args, Clone, Default)]
 pub struct SipArgs {
-    /// The zone's SIP edge, HOST:PORT over UDP (default: the zone service's host, port 5060).
+    /// The zone's SIP edge, HOST:PORT over UDP (default: the SIP domain's `_sip._udp` SRV record,
+    /// else the zone service's host, port 5060).
     #[arg(long, value_name = "HOST:PORT", env = "ZONE_SIP_SERVER")]
     pub sip_server: Option<String>,
     /// The zone's SIP domain (default: the zone service's host).
@@ -89,9 +91,14 @@ pub(crate) fn edge(device: &ZoneDevice, sip: &SipArgs) -> Result<(String, String
         Some(d) => d.clone(),
         None => host()?,
     };
+    // The SIP domain's `_sip._udp` SRV record names the edge; without one, the zone service's
+    // host, as before (a host behind an HTTP-only proxy answers no SIP there).
     let server = match &sip.sip_server {
         Some(s) => s.clone(),
-        None => format!("{}:{SIP_PORT}", host()?),
+        None => match crate::srv::sip_edge(&domain) {
+            Some(edge) => edge,
+            None => format!("{}:{SIP_PORT}", host()?),
+        },
     };
     Ok((server, domain))
 }

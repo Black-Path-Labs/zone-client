@@ -374,15 +374,26 @@ pub fn connect(
     member: &str,
     sip: &SipArgs,
 ) -> Result<(Arc<StreamSession>, FsClient), String> {
-    let caps = device
-        .refresh_capabilities()
-        .unwrap_or_else(|_| device.capabilities());
-    let cap = caps
-        .iter()
-        .filter(|c| {
-            c.kind == FS_CAP_KIND && c.label == FS_CAP_LABEL && c.publisher_id == member && !c.mine
+    let pick = |caps: Vec<bp_zone_core::CapabilityInfo>| {
+        caps.into_iter()
+            .filter(|c| {
+                c.kind == FS_CAP_KIND
+                    && c.label == FS_CAP_LABEL
+                    && c.publisher_id == member
+                    && !c.mine
+            })
+            .max_by_key(|c| (c.online, c.last_seen_ms))
+    };
+    // The command's own sync just read the zone's capabilities: ask Core again only when they
+    // name no server for `member` (one presence read less on every session open).
+    let cap = pick(device.capabilities())
+        .or_else(|| {
+            pick(
+                device
+                    .refresh_capabilities()
+                    .unwrap_or_else(|_| device.capabilities()),
+            )
         })
-        .max_by_key(|c| (c.online, c.last_seen_ms))
         .ok_or_else(|| {
             refusal(&FsError::new(
                 Code::ExportNotFound,
