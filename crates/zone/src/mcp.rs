@@ -672,6 +672,10 @@ fn slash_tools() -> Vec<Value> {
                     json!({"off": {"type": "boolean", "description": "Withdraw the member's profile"}}),
                     json!([]),
                 ),
+                "rep" => (
+                    json!({"off": {"type": "boolean", "description": "Revoke this device's zone rep session now"}}),
+                    json!([]),
+                ),
                 "head" => (
                     json!({"member": {"type": "string", "description": "A pseudonym, a pseudonym prefix of 6 or more characters, or a name or its start; leave out for your own head"}}),
                     json!([]),
@@ -772,7 +776,7 @@ fn local_line(params: &Value) -> Option<String> {
             .unwrap_or_default(),
         "note" => params["arguments"]["text"].as_str().unwrap_or_default(),
         "onboard" => params["arguments"]["answer"].as_str().unwrap_or_default(),
-        "profile" if params["arguments"]["off"] == json!(true) => "off",
+        "profile" | "rep" if params["arguments"]["off"] == json!(true) => "off",
         _ => "",
     };
     Some(format!("/{} {arg}", spec.name).trim_end().to_owned())
@@ -1078,10 +1082,17 @@ mod tests {
                 t["name"]
             );
         }
+        assert_eq!(
             line("zone_head", json!({"member": "Aly"})).as_deref(),
             Some("/head Aly")
         );
         assert_eq!(line("zone_head", json!({})).as_deref(), Some("/head"));
+        assert_eq!(line("zone_heads", json!({})).as_deref(), Some("/heads"));
+        assert_eq!(
+            line("zone_rep", json!({"off": true})).as_deref(),
+            Some("/rep off")
+        );
+        assert_eq!(line("zone_rep", json!({})).as_deref(), Some("/rep"));
         assert_eq!(line("zone_join", json!({})), None, "a hosted tool goes on");
     }
 
