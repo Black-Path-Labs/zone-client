@@ -38,11 +38,21 @@ const CHUNK: usize = 64 * 1024;
 #[derive(clap::Args, Clone, Default)]
 pub struct SipArgs {
     /// The zone's SIP edge, HOST:PORT over UDP (default: the zone service's host, port 5060).
-    #[arg(long, value_name = "HOST:PORT")]
+    #[arg(long, value_name = "HOST:PORT", env = "ZONE_SIP_SERVER")]
     pub sip_server: Option<String>,
     /// The zone's SIP domain (default: the zone service's host).
-    #[arg(long, value_name = "DOMAIN")]
+    #[arg(long, value_name = "DOMAIN", env = "ZONE_SIP_DOMAIN")]
     pub sip_domain: Option<String>,
+}
+
+impl SipArgs {
+    /// The edge from `ZONE_SIP_SERVER` and `ZONE_SIP_DOMAIN`, for callers with no flags (MCP).
+    pub fn from_env() -> SipArgs {
+        SipArgs {
+            sip_server: std::env::var("ZONE_SIP_SERVER").ok(),
+            sip_domain: std::env::var("ZONE_SIP_DOMAIN").ok(),
+        }
+    }
 }
 
 /// `--mode`.
@@ -65,7 +75,7 @@ impl From<Mode> for StreamMode {
 }
 
 /// The SIP server and domain for this device's zone.
-fn edge(device: &ZoneDevice, sip: &SipArgs) -> Result<(String, String), String> {
+pub(crate) fn edge(device: &ZoneDevice, sip: &SipArgs) -> Result<(String, String), String> {
     let host = || -> Result<String, String> {
         url::Url::parse(&device.status().core_url)
             .ok()
