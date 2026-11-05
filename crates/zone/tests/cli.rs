@@ -27,6 +27,8 @@ fn help_lists_every_subcommand() {
         "send-file",
         "files",
         "get",
+        "rename",
+        "caps",
     ] {
         assert!(help.contains(sub), "--help is missing {sub}:\n{help}");
     }
@@ -105,6 +107,19 @@ fn members_and_grants_before_any_join_fail_and_make_no_state() {
         let out = zone_in(&state, cmd);
         assert_eq!(out.status.code(), Some(1), "{cmd:?}: {out:?}");
         assert!(String::from_utf8_lossy(&out.stderr).contains("run `zone join` first"));
+    }
+    assert!(!state.exists());
+}
+
+#[test]
+fn rename_and_caps_sync_before_any_join_fail_and_make_no_state() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = tmp.path().join("zone");
+    for args in [&["rename", "Aly"][..], &["caps", "--sync"]] {
+        let out = zone_in(&state, args);
+        assert_eq!(out.status.code(), Some(1), "{args:?}: {out:?}");
+        let err = String::from_utf8(out.stderr).unwrap();
+        assert!(err.contains("no zone joined"), "{args:?}: {err}");
     }
     assert!(!state.exists());
 }

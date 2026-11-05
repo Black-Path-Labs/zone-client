@@ -46,7 +46,10 @@ pub fn open_existing(
         return Ok(None);
     }
     // The store's settings win over these arguments; they only seed a new device.
-    open(dir, String::new(), String::new(), transport).map(Some)
+    let device = open(dir, String::new(), String::new(), transport)?;
+    // A saved `agent.json` is what this seat advertises; the next sync publishes a change.
+    crate::profile::apply(dir, &device);
+    Ok(Some(device))
 }
 
 /// The device in `dir`, made on first use with `core_url` and `core_zone` as where new zones go.

@@ -320,3 +320,70 @@ fn a_join_address_is_resolved_at_core_and_checked_before_any_state() {
     assert!(String::from_utf8_lossy(&out.stderr).contains("Core unreachable"));
     assert!(!state.exists());
 }
+
+#[test]
+fn a_bad_manifest_is_refused_before_any_state_or_core() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = tmp.path().join("zone");
+    let code = unreachable_zone_code();
+    for (body, want) in [
+        (&br#"{"name":"Aly"}"#[..], "want exactly"),
+        (
+            br#"{"name":"Aly","capabilities":["a","a"]}"#,
+            "want exactly",
+        ),
+        (
+            br#"{"name":"Aly","capabilities":[],"price":1}"#,
+            "want exactly",
+        ),
+        (b"not json", "not JSON"),
+    ] {
+        let manifest = tmp.path().join("agent.json");
+        std::fs::write(&manifest, body).unwrap();
+        let out = zone(
+            &state,
+            &["join", "--manifest", manifest.to_str().unwrap(), &code],
+        );
+        assert_eq!(out.status.code(), Some(1), "{out:?}");
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(err.contains("manifest") && err.contains(want), "{err}");
+        assert!(!err.contains("Core unreachable"), "{err}");
+    }
+    let out = zone(&state, &["join", "--name", "", &code]);
+    assert_eq!(out.status.code(), Some(1), "{out:?}");
+    assert!(String::from_utf8_lossy(&out.stderr).contains("a name is 1 to 64 bytes"));
+    let missing = tmp.path().join("missing.json");
+    let out = zone(
+        &state,
+        &["join", "--manifest", missing.to_str().unwrap(), &code],
+    );
+    assert_eq!(out.status.code(), Some(1), "{out:?}");
+    assert!(!state.exists());
+}
+
+#[test]
+fn name_and_agent_flags_that_cannot_work_together_are_refused() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = tmp.path().join("zone");
+    let code = unreachable_zone_code();
+    let manifest = tmp.path().join("agent.json");
+    std::fs::write(&manifest, br#"{"name":"Aly","capabilities":[]}"#).unwrap();
+    for args in [
+        // A manifest already names the seat.
+        &[
+            "join",
+            "--manifest",
+            manifest.to_str().unwrap(),
+            "--name",
+            "Aly",
+        ][..],
+        // An agent id picks one of a kit's agents: no kit, no agent id.
+        &["join", "--agent-id", "aly"],
+    ] {
+        let mut all = args.to_vec();
+        all.push(&code);
+        let out = zone(&state, &all);
+        assert_eq!(out.status.code(), Some(2), "{args:?}: {out:?}");
+    }
+    assert!(!state.exists());
+}
