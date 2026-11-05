@@ -406,6 +406,7 @@ zone fs <agent> ls core/src
 zone fs <agent> cat core/src/lib.rs
 zone fs <agent> grep -t rust 'fn main' core/
 zone fs <agent> find mod.rs core/
+zone fs <agent> symbols verify_jwt core/
 zone fs <agent> mount ~/mnt/core core/                    # read-only, until Ctrl+C
 ```
 

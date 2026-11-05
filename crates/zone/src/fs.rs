@@ -62,7 +62,7 @@ pub enum FsCommand {
         /// Path prefixes inside the export (repeatable; default the whole export).
         #[arg(long = "path", value_name = "PREFIX")]
         paths: Vec<String>,
-        /// Operations: metadata, read, grep, find, symbols (comma-separated).
+        /// Operations: metadata, read, grep, find, symbols, mount (comma-separated).
         #[arg(long, value_delimiter = ',', default_value = "metadata,read,grep,find")]
         ops: Vec<String>,
         /// Lifetime in minutes (at most 60).
@@ -152,7 +152,8 @@ enum Op {
         fixed_strings: bool,
         #[arg(long, short = 'i')]
         ignore_case: bool,
-        #[arg(long)]
+        /// Stop after this many matches.
+        #[arg(long, short = 'm')]
         max_count: Option<u64>,
         #[arg(long)]
         json: bool,
@@ -164,6 +165,20 @@ enum Op {
         path: String,
         #[arg(long)]
         glob: bool,
+        #[arg(long, short = 'i')]
+        ignore_case: bool,
+    },
+    /// Definitions named NAME (functions, types...), from the owner's tree-sitter index.
+    Symbols {
+        name: String,
+        #[arg(default_value = "")]
+        path: String,
+        /// function, method, class, interface, module...
+        #[arg(long)]
+        kind: Option<String>,
+        /// The whole name, not a part of it.
+        #[arg(long)]
+        exact: bool,
         #[arg(long, short = 'i')]
         ignore_case: bool,
     },
@@ -808,6 +823,31 @@ fn op(client: &FsClient, op: Op) -> Result<(), String> {
             grep_path,
             runs,
         } => bench(client, &ls, &cat, &grep, &grep_path, runs),
+        Op::Symbols {
+            name,
+            path,
+            kind,
+            exact,
+            ignore_case,
+        } => {
+            let a = bp_zone_fs::symbols::SymbolArgs {
+                name,
+                kind,
+                exact,
+                case_insensitive: ignore_case,
+            };
+            let (symbols, end) = client.symbols(&path, &a, None).map_err(|e| refusal(&e))?;
+            for s in symbols {
+                println!("{}:{}:{}: {} {}", s.path, s.line, s.column, s.kind, s.name);
+            }
+            if end.truncated {
+                eprintln!(
+                    "zone fs: stopped at the result bound after {} symbols",
+                    end.items
+                );
+            }
+            Ok(())
+        }
         Op::Mount { .. } => Err("zone fs mount: handled by the caller".into()),
     }
 }
