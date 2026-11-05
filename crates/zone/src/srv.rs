@@ -4,7 +4,7 @@
 //! Only the lowest-priority answer is used, and nothing is cached.
 
 use std::net::{IpAddr, SocketAddr, UdpSocket};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use rand_core::{OsRng, RngCore};
 
@@ -29,10 +29,15 @@ pub fn sip_edge(domain: &str) -> Option<String> {
     .parse()
     .ok()?;
     let socket = UdpSocket::bind(bind).ok()?;
-    socket.set_read_timeout(Some(WAIT)).ok()?;
     socket.send_to(&query, SocketAddr::new(resolver, 53)).ok()?;
+    // One deadline for the whole wait, so stray packets cannot keep the read going.
+    let deadline = Instant::now() + WAIT;
     let mut buf = [0u8; 1500];
     loop {
+        let left = deadline.checked_duration_since(Instant::now())?;
+        socket
+            .set_read_timeout(Some(left.max(Duration::from_millis(1))))
+            .ok()?;
         let (n, from) = socket.recv_from(&mut buf).ok()?;
         if from.ip() == resolver {
             if let Some(answer) = parse_srv_answer(&buf[..n], id) {
