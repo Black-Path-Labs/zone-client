@@ -3,7 +3,7 @@
 //! ranged `cat` on the owner; every write-like operation answers `EROFS` here, before any request
 //! leaves this machine, on a mount the kernel also holds read-only.
 //!
-//! Caching (ZF-D10): metadata is reused for at most one second, counting both this process and
+//! Caching: metadata is reused for at most one second, counting both this process and
 //! the kernel's entry and attribute caches. File contents are never cached: files open with
 //! direct I/O, so every read is a fresh `cat` and a grant that expired or was revoked fails the
 //! next read instead of serving stale bytes.
@@ -31,16 +31,14 @@ pub fn available() -> Result<(), String> {
     #[cfg(target_os = "linux")]
     {
         if !std::path::Path::new("/dev/fuse").exists() {
-            return Err(
-                "zone fs mount needs FUSE, and /dev/fuse is missing: install fuse3 \
+            return Err("FUSE is needed and /dev/fuse is missing: install fuse3 \
                         (or load the fuse kernel module) and try again"
-                    .into(),
-            );
+                .into());
         }
         // SAFETY: geteuid has no preconditions and cannot fail.
         if unsafe { libc::geteuid() } != 0 && fusermount().is_none() {
             return Err(
-                "zone fs mount needs the fusermount3 helper, and it is not installed: \
+                "mounting needs the fusermount3 helper, and it is not installed: \
                         install fuse3 and try again"
                     .into(),
             );
@@ -58,7 +56,7 @@ pub fn available() -> Result<(), String> {
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
         Err(
-            "zone fs mount needs Linux with FUSE; this platform has none. Use \
+            "mounting needs Linux with FUSE; this platform has none. Use \
              `zone fs <agent> ls` and `cat` instead"
                 .into(),
         )
@@ -371,14 +369,16 @@ impl ZoneFs {
         let remote = self.remote(&self.path_of(ino)?);
         let mut out = Vec::with_capacity(size as usize);
         loop {
-            let want = size as u64 - out.len() as u64;
+            // The client refuses more than `want`, so `out` never passes `size`.
+            let want = (size as u64).saturating_sub(out.len() as u64);
             if want == 0 {
                 break;
             }
             let pos = offset + out.len() as u64;
+            let before = out.len();
             match self.client.cat(&remote, pos, Some(want), &mut out) {
-                // The owner cut the answer at its bound; ask for the rest.
-                Ok(end) if end.truncated && end.bytes > 0 => continue,
+                // The owner cut the answer at its bound; ask for the rest, if it made progress.
+                Ok(end) if end.truncated && out.len() > before => continue,
                 Ok(_) => break,
                 // Past the end, as when the file shrank since its size was read.
                 Err(e) if e.code == Code::Path => break,
@@ -741,15 +741,24 @@ mod kernel {
     }
 
     pub(super) fn mount(client: Arc<FsClient>, root: &str, dir: &Path) -> Result<(), String> {
+        if let Err(e) = std::fs::metadata(dir) {
+            if e.raw_os_error() == Some(libc::ENOTCONN) {
+                return Err(format!(
+                    "fs-path: {} is a mount left by a process that ended; run `fusermount3 -u {}` first",
+                    dir.display(),
+                    dir.display()
+                ));
+            }
+        }
         if !dir.is_dir() {
-            return Err(format!("{}: not a directory", dir.display()));
+            return Err(format!("fs-path: {} is not a directory", dir.display()));
         }
         // Fail here, not on the first `ls` in the mount, when the path is wrong or not shared.
         let root = root.trim_matches('/');
         if !root.is_empty() {
-            let e = client.stat(root).map_err(|e| format!("{root}: {e}"))?;
+            let e = client.stat(root).map_err(|e| e.to_string())?;
             if e.kind != Kind::Dir {
-                return Err(format!("{root}: not a directory"));
+                return Err(format!("fs-path: {root} is not a directory"));
             }
         }
         crate::run::catch_signals();

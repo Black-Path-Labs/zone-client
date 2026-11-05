@@ -207,14 +207,30 @@ enum Op {
 
 /// A `zone fs` refusal: the stable code first, then plain words.
 fn refusal(e: &FsError) -> String {
+    let message = clean(&e.message);
     match e.retry_after_s {
-        Some(s) => format!(
-            "zone fs: {}: {} (retry in {s} s)",
-            e.code.as_str(),
-            e.message
-        ),
-        None => format!("zone fs: {}: {}", e.code.as_str(), e.message),
+        Some(s) => format!("zone fs: {}: {message} (retry in {s} s)", e.code.as_str()),
+        None => format!("zone fs: {}: {message}", e.code.as_str()),
     }
+}
+
+/// Text the other member chose (names, match lines, messages), with control characters shown
+/// as `\xNN` so it cannot drive the terminal it is printed to.
+fn clean(s: &str) -> std::borrow::Cow<'_, str> {
+    if !s.chars().any(char::is_control) {
+        return std::borrow::Cow::Borrowed(s);
+    }
+    std::borrow::Cow::Owned(
+        s.chars()
+            .map(|c| {
+                if c.is_control() {
+                    format!("\\x{:02x}", c as u32)
+                } else {
+                    c.to_string()
+                }
+            })
+            .collect(),
+    )
 }
 
 fn fs_dir(state: &Path) -> Result<PathBuf, String> {
@@ -280,7 +296,7 @@ impl Signer for DeviceSigner {
 }
 
 /// A member by full pseudonym, or by the one roster card whose name matches case-insensitively
-/// (ZF-D16).
+/// (never a guess between several).
 pub fn resolve_member(device: &ZoneDevice, who: &str) -> Result<String, FsError> {
     let members = device.members();
     if let Some(m) = members.iter().find(|m| m.member_id == who) {
@@ -383,7 +399,7 @@ pub fn connect(
             server,
             domain,
         )
-        .map_err(|e| format!("zone fs: {e}"))?;
+        .map_err(|e| format!("zone fs: fs-transport: {e}"))?;
     let client = FsClient::new(Arc::new(SessionConn(session.clone())));
     Ok((session, client))
 }
@@ -422,7 +438,16 @@ pub fn command(state: &Path, command: FsCommand) -> Result<(), String> {
             srv.grants
                 .revoke_export(srv.signer(), &exports[i].export_id)
                 .map_err(|e| refusal(&e))?;
+            // Its shares go too, each with a tombstone announced to its members: a share is
+            // its own authority and would outlive the export otherwise.
+            for (_, s) in srv.shares.live(srv.signer()) {
+                if s.export_id == exports[i].export_id {
+                    let p = srv.unshare(&s.name).map_err(|e| refusal(&e))?;
+                    announce(&device, &p);
+                }
+            }
             exports.remove(i);
+            // A running `zone fs serve` sees the file change and stops serving it.
             save_exports(state, &exports)
         }
         FsCommand::Exports => {
@@ -497,7 +522,20 @@ pub fn command(state: &Path, command: FsCommand) -> Result<(), String> {
         FsCommand::Revoke { grant_id } => {
             let device = items::joined(state, "fs revoke")?;
             let srv = server(state, &device)?;
-            srv.grants.revoke(&grant_id).map_err(|e| refusal(&e))
+            if !srv
+                .grants
+                .all(srv.signer())
+                .iter()
+                .any(|(_, g)| g.grant_id == grant_id)
+            {
+                return Err(refusal(&FsError::new(
+                    Code::Grant,
+                    format!("no grant {grant_id}; `zone fs grants` lists yours"),
+                )));
+            }
+            srv.grants.revoke(&grant_id).map_err(|e| refusal(&e))?;
+            println!("{}", json!({"grant_id": grant_id, "revoked": true}));
+            Ok(())
         }
         FsCommand::Grants => {
             let device = items::joined(state, "fs grants")?;
@@ -584,7 +622,28 @@ fn serve(state: &Path, sip: &SipArgs, republish: bool) -> Result<(), String> {
         "zone {CMD}: serving {} export(s); Ctrl+C to stop",
         srv.exports().len()
     );
+    let exports_file = fs_dir(state)?.join("exports.json");
+    let mut stamp = fs::metadata(&exports_file).and_then(|m| m.modified()).ok();
     while !run::stopped() {
+        // `zone fs export` and `unexport` in another process take effect without a restart.
+        let now = fs::metadata(&exports_file).and_then(|m| m.modified()).ok();
+        if now != stamp {
+            stamp = now;
+            let want = load_exports(state)?;
+            for e in srv.exports() {
+                if !want.iter().any(|w| w.export_id == e.cfg.export_id) {
+                    let _ = srv.disable_export(&e.cfg.export_id);
+                }
+            }
+            for w in want {
+                if !srv.exports().iter().any(|e| e.cfg.export_id == w.export_id) {
+                    let label = w.label.clone();
+                    if let Err(e) = srv.add_export(w) {
+                        eprintln!("zone {CMD}: export {label} skipped: {}", refusal(&e));
+                    }
+                }
+            }
+        }
         match offer.accept(1) {
             Ok(Some(session)) => {
                 let srv = srv.clone();
@@ -641,8 +700,9 @@ fn list_exporters(state: &Path, sip: &SipArgs, as_json: bool) -> Result<(), Stri
             let suffix = &member[member.len().saturating_sub(8)..];
             for e in exports {
                 println!(
-                    "{name} (…{suffix})\t{}\t{}\texpires {}",
-                    e["label"].as_str().unwrap_or_default(),
+                    "{} (…{suffix})\t{}\t{}\texpires {}",
+                    clean(&name),
+                    clean(e["label"].as_str().unwrap_or_default()),
                     e["ops"]
                         .as_array()
                         .map(|a| a
@@ -665,7 +725,7 @@ fn entry_line(e: &bp_zone_fs::policy::Entry) -> String {
         bp_zone_fs::policy::Kind::File if e.exec => "x",
         bp_zone_fs::policy::Kind::File => "-",
     };
-    format!("{kind} {:>10} {}", e.size, e.path)
+    format!("{kind} {:>10} {}", e.size, clean(&e.path))
 }
 
 fn target(state: &Path, cli: TargetCli) -> Result<(), String> {
@@ -675,7 +735,10 @@ fn target(state: &Path, cli: TargetCli) -> Result<(), String> {
     }
     let device = items::joined(state, "fs")?;
     let member = resolve_member(&device, &cli.agent).map_err(|e| refusal(&e))?;
-    run::catch_signals();
+    // Ctrl+C ends a stream cleanly; a one-shot request is simply interrupted.
+    if matches!(cli.op, Op::Grep { .. } | Op::Tree { .. } | Op::Bench { .. }) {
+        run::catch_signals();
+    }
     let t = Instant::now();
     let (session, client) = connect(&device, &member, &cli.sip)?;
     if matches!(cli.op, Op::Bench { .. }) {
@@ -685,7 +748,8 @@ fn target(state: &Path, cli: TargetCli) -> Result<(), String> {
         );
     }
     let result = match cli.op {
-        Op::Mount { dir, root } => crate::fsmount::mount(Arc::new(client), &root, &dir),
+        Op::Mount { dir, root } => crate::fsmount::mount(Arc::new(client), &root, &dir)
+            .map_err(|e| format!("zone fs mount: {e}")),
         other => op(&client, other),
     };
     close(&session);
@@ -747,6 +811,13 @@ fn op(client: &FsClient, op: Op) -> Result<(), String> {
                 if !end.truncated || run::stopped() {
                     return Ok(());
                 }
+                // An owner that hands back no cursor, or the same one, would page forever.
+                if end.cursor.is_none() || end.cursor == cursor {
+                    return Err(refusal(&FsError::new(
+                        Code::Transport,
+                        "the owner's listing does not advance",
+                    )));
+                }
                 cursor = end.cursor;
             }
         }
@@ -781,7 +852,13 @@ fn op(client: &FsClient, op: Op) -> Result<(), String> {
                     json!({"path": m.path, "line": m.line, "column": m.column, "text": m.text})
                         .to_string()
                 } else {
-                    format!("{}:{}:{}:{}", m.path, m.line, m.column, m.text)
+                    format!(
+                        "{}:{}:{}:{}",
+                        clean(&m.path),
+                        m.line,
+                        m.column,
+                        clean(&m.text)
+                    )
                 };
                 if writeln!(out, "{line}").and_then(|()| out.flush()).is_err() {
                     failed = true;
@@ -812,7 +889,7 @@ fn op(client: &FsClient, op: Op) -> Result<(), String> {
                 .find(&path, &name, glob, ignore_case)
                 .map_err(|e| refusal(&e))?;
             for e in entries {
-                println!("{}", e.path);
+                println!("{}", clean(&e.path));
             }
             Ok(())
         }
@@ -838,7 +915,14 @@ fn op(client: &FsClient, op: Op) -> Result<(), String> {
             };
             let (symbols, end) = client.symbols(&path, &a, None).map_err(|e| refusal(&e))?;
             for s in symbols {
-                println!("{}:{}:{}: {} {}", s.path, s.line, s.column, s.kind, s.name);
+                println!(
+                    "{}:{}:{}: {} {}",
+                    clean(&s.path),
+                    s.line,
+                    s.column,
+                    clean(&s.kind),
+                    clean(&s.name)
+                );
             }
             if end.truncated {
                 eprintln!(
@@ -1036,7 +1120,7 @@ pub fn share_command(state: &Path, command: ShareCommand) -> Result<(), String> 
 /// Sessions the MCP tools keep open, one per exporting member, so a tool call after the first
 /// costs a round trip and not a session setup.
 static SESSIONS: std::sync::Mutex<Vec<Kept>> = std::sync::Mutex::new(Vec::new());
-/// An open session: the member, the stream and the client over it.
+/// An open session: the agent as the tool call named it, the stream and the client over it.
 type Kept = (String, Arc<StreamSession>, Arc<FsClient>);
 /// The most file bytes one `zone_fs_read` returns.
 const MCP_READ_MAX: u64 = 1024 * 1024;
@@ -1092,17 +1176,35 @@ pub fn mcp_tools() -> Vec<Value> {
 }
 
 fn mcp_client(state: &Path, agent: &str) -> Result<Arc<FsClient>, String> {
+    {
+        // A hit costs no sync and no roster read: the key is what the agent was called.
+        let mut sessions = SESSIONS.lock().unwrap_or_else(|p| p.into_inner());
+        sessions.retain(|(_, s, _)| s.is_open());
+        if let Some((_, _, c)) = sessions.iter().find(|(a, _, _)| a == agent) {
+            return Ok(c.clone());
+        }
+    }
     let device = items::joined(state, "fs")?;
     let member = resolve_member(&device, agent).map_err(|e| refusal(&e))?;
-    let mut sessions = SESSIONS.lock().unwrap_or_else(|p| p.into_inner());
-    sessions.retain(|(_, s, _)| s.is_open());
-    if let Some((_, _, c)) = sessions.iter().find(|(m, _, _)| *m == member) {
-        return Ok(c.clone());
-    }
     let (session, client) = connect(&device, &member, &SipArgs::from_env())?;
     let client = Arc::new(client);
-    sessions.push((member, session, client.clone()));
+    SESSIONS.lock().unwrap_or_else(|p| p.into_inner()).push((
+        agent.to_owned(),
+        session,
+        client.clone(),
+    ));
     Ok(client)
+}
+
+/// Drop `agent`'s session after a transport error: its frame reader may be unusable.
+fn mcp_forget(agent: &str) {
+    let mut sessions = SESSIONS.lock().unwrap_or_else(|p| p.into_inner());
+    sessions.retain(|(a, s, _)| {
+        if a == agent {
+            close(s);
+        }
+        a != agent
+    });
 }
 
 /// A zone fs tool call's MCP result, or None when `params` names another tool.
@@ -1116,7 +1218,12 @@ pub fn mcp_call(state: &Path, params: &Value) -> Option<Value> {
         let agent = a["agent"].as_str().ok_or("agent is required")?;
         let path = a["path"].as_str().unwrap_or_default();
         let client = mcp_client(state, agent)?;
-        let fail = |e: FsError| refusal(&e);
+        let fail = |e: FsError| {
+            if e.code == Code::Transport {
+                mcp_forget(agent);
+            }
+            refusal(&e)
+        };
         match name {
             "zone_fs_list" => {
                 let entries = client.ls(path).map_err(fail)?;
@@ -1168,7 +1275,7 @@ pub fn mcp_call(state: &Path, params: &Value) -> Option<Value> {
                     match end {
                         Ok(_) => {}
                         Err(e) if e.code == Code::Cancelled => {}
-                        Err(e) => return Err(refusal(&e)),
+                        Err(e) => return Err(fail(e)),
                     }
                     Ok(json!({"matches": matches}))
                 } else if let Some(n) = a["name"].as_str() {
