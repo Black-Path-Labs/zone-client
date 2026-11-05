@@ -16,7 +16,9 @@ use std::time::Instant;
 
 use bp_zone_core::stream::FS_CAP_LABEL;
 use bp_zone_core::{StreamMode, StreamSession, ZoneDevice};
+use bp_zone_fs::coding::{self, PatchInbox};
 use bp_zone_fs::grant::{GrantSpec, GrantStore, Limits, Subject};
+use bp_zone_fs::patch::{self, ClaimedCheck, PatchSpec, SessionRef};
 use bp_zone_fs::receipt::ReceiptLog;
 use bp_zone_fs::search::GrepArgs;
 use bp_zone_fs::server::ExportConfig;
@@ -62,7 +64,8 @@ pub enum FsCommand {
         /// Path prefixes inside the export (repeatable; default the whole export).
         #[arg(long = "path", value_name = "PREFIX")]
         paths: Vec<String>,
-        /// Operations: metadata, read, grep, find, symbols, mount (comma-separated).
+        /// Operations: metadata, read, grep, find, symbols, mount, patch (comma-separated).
+        /// `patch` lets the member send signed patches to your inbox (`zone fs inbox`).
         #[arg(long, value_delimiter = ',', default_value = "metadata,read,grep,find")]
         ops: Vec<String>,
         /// Lifetime in minutes (at most 60).
@@ -93,9 +96,49 @@ pub enum FsCommand {
         #[arg(long)]
         republish: bool,
     },
+    /// Patches coding sessions sent you: list, show, review in a worktree with your checks,
+    /// accept (a signed receipt and one payment reference) or reject.
+    Inbox {
+        #[command(subcommand)]
+        command: InboxCommand,
+    },
     /// `zone fs <agent> <op> ...`.
     #[command(external_subcommand)]
     Target(Vec<String>),
+}
+
+/// `zone fs inbox` subcommands. Nothing here applies a patch to your tree: review happens in a
+/// detached worktree, and merging an accepted commit is yours to do.
+#[derive(clap::Subcommand)]
+pub enum InboxCommand {
+    /// Every patch filed, oldest first, as JSON lines (no patch text).
+    List,
+    /// One patch's summary; `--diff` writes the patch itself to stdout.
+    Show {
+        patch_id: String,
+        #[arg(long)]
+        diff: bool,
+    },
+    /// Apply a patch in a fresh worktree at its base and run your checks there.
+    Review {
+        patch_id: String,
+        /// `NAME=COMMAND ARGS...`, run in the worktree without a shell (repeatable; at least one).
+        #[arg(long = "check", value_name = "NAME=COMMAND", required = true)]
+        checks: Vec<String>,
+        /// Seconds each check may run.
+        #[arg(long, default_value_t = 900)]
+        timeout: u64,
+    },
+    /// Accept a reviewed patch whose checks all passed: a signed accepted-patch receipt and a
+    /// payment reference, sent to its author. Accepting again returns the same receipt.
+    Accept { patch_id: String },
+    /// Reject a patch with a stable reason, sent to its author with a signed receipt.
+    Reject {
+        patch_id: String,
+        /// owner-rejected, checks-failed, apply-failed, base-missing, denied-path...
+        #[arg(long, default_value = "owner-rejected")]
+        reason: String,
+    },
 }
 
 /// The requester's operations, after the agent.
@@ -181,6 +224,30 @@ enum Op {
         exact: bool,
         #[arg(long, short = 'i')]
         ignore_case: bool,
+    },
+    /// Send a patch to the agent's inbox for export LABEL, signed by this device. Needs a live
+    /// grant naming `patch`. The owner reviews it with its own checks; nothing is applied here.
+    Patch {
+        label: String,
+        /// The patch file (`git diff` output), or `-` for stdin.
+        file: PathBuf,
+        /// The full commit id the patch is against.
+        #[arg(long)]
+        base: String,
+        /// A check you ran, `NAME=pass|fail|skip` (repeatable). Recorded, never trusted.
+        #[arg(long = "check", value_name = "NAME=RESULT")]
+        checks: Vec<String>,
+        /// The PR carrying the same change, if any (plain https URL).
+        #[arg(long)]
+        pr: Option<String>,
+    },
+    /// Ask the agent a question about export LABEL while you work on it: a note to that member
+    /// only, marked blocked/question. QUESTION may be `-` for stdin.
+    Ask {
+        label: String,
+        question: String,
+        #[arg(long)]
+        base: Option<String>,
     },
     /// Mount an export read-only at DIR until interrupted (Linux, with FUSE).
     Mount {
@@ -341,7 +408,10 @@ fn server(state: &Path, device: &Arc<ZoneDevice>) -> Result<Server, String> {
         grants,
         ReceiptLog::file(dir.join("receipts.jsonl")),
     )
-    .with_shares(shares);
+    .with_shares(shares)
+    .with_patches(Arc::new(
+        PatchInbox::open(&dir.join("patches")).map_err(|e| format!("zone fs: {e}"))?,
+    ));
     for cfg in load_exports(state)? {
         let label = cfg.label.clone();
         if let Err(e) = srv.add_export(cfg) {
@@ -562,6 +632,7 @@ pub fn command(state: &Path, command: FsCommand) -> Result<(), String> {
             Ok(())
         }
         FsCommand::Serve { sip, republish } => serve(state, &sip, republish),
+        FsCommand::Inbox { command } => inbox(state, command),
         FsCommand::Ls { sip, json: as_json } => list_exporters(state, &sip, as_json),
         FsCommand::Target(args) => {
             let cli =
@@ -759,6 +830,25 @@ fn target(state: &Path, cli: TargetCli) -> Result<(), String> {
         );
     }
     let result = match cli.op {
+        Op::Patch {
+            label,
+            file,
+            base,
+            checks,
+            pr,
+        } => submit_patch(&device, &client, &label, &file, base, &checks, pr),
+        Op::Ask {
+            label,
+            question,
+            base,
+        } => ask(
+            &device,
+            &client,
+            &member,
+            &label,
+            &question,
+            base.as_deref(),
+        ),
         Op::Mount { dir, root } => crate::fsmount::mount(Arc::new(client), &root, &dir)
             .map_err(|e| format!("zone fs mount: {e}")),
         other => op(&client, other),
@@ -943,7 +1033,232 @@ fn op(client: &FsClient, op: Op) -> Result<(), String> {
             }
             Ok(())
         }
-        Op::Mount { .. } => Err("zone fs mount: handled by the caller".into()),
+        Op::Mount { .. } | Op::Patch { .. } | Op::Ask { .. } => {
+            Err("zone fs: handled by the caller".into())
+        }
+    }
+}
+
+// ── Coding sessions ──────────────────────────────────────────────────────────────────────────
+
+/// stdin for `-`, else the file; at most `max` bytes.
+fn read_input(path: &Path, max: usize, what: &str) -> Result<Vec<u8>, String> {
+    use std::io::Read;
+    let mut buf = vec![];
+    let r: Box<dyn Read> = if path == Path::new("-") {
+        Box::new(std::io::stdin())
+    } else {
+        Box::new(
+            fs::File::open(path)
+                .map_err(|e| format!("zone fs: {what}: {}: {e}", path.display()))?,
+        )
+    };
+    r.take(max as u64 + 1)
+        .read_to_end(&mut buf)
+        .map_err(|e| format!("zone fs: {what}: {e}"))?;
+    if buf.len() > max {
+        return Err(format!("zone fs: fs-size: the {what} is over {max} bytes"));
+    }
+    Ok(buf)
+}
+
+fn submit_patch(
+    device: &Arc<ZoneDevice>,
+    client: &FsClient,
+    label: &str,
+    file: &Path,
+    base: String,
+    checks: &[String],
+    pr: Option<String>,
+) -> Result<(), String> {
+    let bytes = read_input(file, patch::MAX_PATCH_BYTES, "patch")?;
+    let checks_claimed = checks
+        .iter()
+        .map(|c| {
+            let (name, result) = c
+                .rsplit_once('=')
+                .ok_or_else(|| format!("zone fs patch: --check {c:?}: want NAME=pass|fail|skip"))?;
+            Ok(ClaimedCheck {
+                name: name.to_owned(),
+                result: result.to_owned(),
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    let session = client.coding_session(label).map_err(|e| refusal(&e))?;
+    let signer = DeviceSigner::new(device.clone())?;
+    let (envelope, env) = patch::sign_envelope(
+        &signer,
+        &PatchSpec {
+            zone: device.status().zone_id.unwrap_or_default(),
+            export_id: session.export_id.clone(),
+            base_commit: base,
+            checks_claimed,
+            pr_url: pr,
+            session: Some(SessionRef {
+                grant_id: session.grant_id.clone(),
+                requester: signer.member(),
+            }),
+            ttl_ms: 0,
+        },
+        &bytes,
+        now_ms(),
+    )
+    .map_err(|e| format!("zone fs patch: {e}"))?;
+    let (v, _) = client
+        .submit_patch(label, &envelope, &bytes)
+        .map_err(|e| refusal(&e))?;
+    println!(
+        "{}",
+        json!({"patch_id": v["patch_id"], "patch_digest": env.patch_digest, "files": env.files.len(), "status": v["status"]})
+    );
+    Ok(())
+}
+
+fn ask(
+    device: &Arc<ZoneDevice>,
+    client: &FsClient,
+    member: &str,
+    label: &str,
+    question: &str,
+    base: Option<&str>,
+) -> Result<(), String> {
+    let text = if question == "-" {
+        String::from_utf8(read_input(Path::new("-"), 32 * 1024, "question")?)
+            .map_err(|_| "zone fs ask: the question is not UTF-8")?
+    } else {
+        question.to_owned()
+    };
+    let session = client.coding_session(label).map_err(|e| refusal(&e))?;
+    let note = coding::question_note(&session.export_id, &session.grant_id, base, &text)
+        .map_err(|e| refusal(&e))?;
+    let id = device
+        .add_note_to(vec![member.to_owned()], note)
+        .map_err(|e| items::sdk_error("fs ask", &e))?;
+    println!(
+        "{}",
+        json!({"note": id.id, "to": member, "state": coding::BLOCKED_STATE, "focus": coding::QUESTION_FOCUS})
+    );
+    Ok(())
+}
+
+/// The repository behind the export a filed patch names.
+fn patch_repo(state: &Path, export_id: &str) -> Result<PathBuf, String> {
+    let export = load_exports(state)?
+        .into_iter()
+        .find(|e| e.export_id == export_id)
+        .ok_or("zone fs inbox: that patch's export is no longer exported")?;
+    coding::repo_of(&export.root)
+        .map(|(top, _)| top)
+        .ok_or_else(|| "zone fs inbox: that export is not in a git work tree".into())
+}
+
+/// Tell a patch's author how it ended: the signed receipt, sealed to that member alone.
+fn tell_author(device: &ZoneDevice, author: &str, body: Value) {
+    if let Err(e) = device.add_note_to(vec![author.to_owned()], body.to_string()) {
+        eprintln!("{}", items::sdk_error("fs inbox: telling the author", &e));
+    }
+}
+
+fn inbox(state: &Path, command: InboxCommand) -> Result<(), String> {
+    let device = items::joined(state, "fs inbox")?;
+    let srv = server(state, &device)?;
+    let inbox = srv.patches().ok_or("zone fs inbox: no inbox")?;
+    let signer = srv.signer();
+    let perr = |e: patch::PatchError| format!("zone fs inbox: {e}");
+    match command {
+        InboxCommand::List => {
+            for f in inbox.list(signer) {
+                println!("{}", f.summary());
+            }
+            Ok(())
+        }
+        InboxCommand::Show { patch_id, diff } => {
+            let (f, bytes) = inbox.get(signer, &patch_id).map_err(perr)?;
+            if diff {
+                let mut out = std::io::stdout().lock();
+                out.write_all(&bytes)
+                    .and_then(|()| out.flush())
+                    .map_err(|e| format!("zone fs: stdout: {}", e.kind()))?;
+            } else {
+                println!("{}", f.summary());
+            }
+            Ok(())
+        }
+        InboxCommand::Review {
+            patch_id,
+            checks,
+            timeout,
+        } => {
+            let checks = checks
+                .iter()
+                .map(|c| {
+                    let (name, cmd) = c.split_once('=').ok_or_else(|| {
+                        format!("zone fs inbox: --check {c:?}: want NAME=COMMAND")
+                    })?;
+                    let argv: Vec<String> = cmd.split_whitespace().map(str::to_owned).collect();
+                    if name.trim().is_empty() || argv.is_empty() {
+                        return Err(format!("zone fs inbox: --check {c:?}: want NAME=COMMAND"));
+                    }
+                    Ok((name.trim().to_owned(), argv))
+                })
+                .collect::<Result<Vec<_>, String>>()?;
+            let (f, _) = inbox.get(signer, &patch_id).map_err(perr)?;
+            let repo = patch_repo(state, &f.envelope.export_id)?;
+            let (applied, ran) = inbox
+                .review(
+                    signer,
+                    &patch_id,
+                    &repo,
+                    &checks,
+                    std::time::Duration::from_secs(timeout),
+                    now_ms(),
+                )
+                .map_err(perr)?;
+            let passed = ran.iter().all(|c| c.result == "pass");
+            println!(
+                "{}",
+                json!({
+                    "patch_id": patch_id,
+                    "commit": applied.commit,
+                    "worktree": applied.workdir,
+                    "checks": ran.iter().map(|c| json!({"name": c.name, "result": c.result, "duration_ms": c.duration_ms})).collect::<Vec<_>>(),
+                    "passed": passed,
+                })
+            );
+            Ok(())
+        }
+        InboxCommand::Accept { patch_id } => {
+            let (f, _) = inbox.get(signer, &patch_id).map_err(perr)?;
+            let a = inbox.accept(signer, &patch_id, now_ms()).map_err(perr)?;
+            let body = json!({"type": "bp-zone-fs-patch-outcome-v1", "patch_id": patch_id, "outcome": "accepted", "payment_ref": a.payment_ref, "receipt": a.receipt});
+            if a.first {
+                tell_author(&device, &f.envelope.author, body.clone());
+            }
+            println!(
+                "{}",
+                json!({"patch_id": patch_id, "payment_ref": a.payment_ref, "first": a.first, "receipt": a.receipt})
+            );
+            Ok(())
+        }
+        InboxCommand::Reject { patch_id, reason } => {
+            let reason = patch::Reason::parse(&reason)
+                .ok_or_else(|| format!("zone fs inbox: unknown reason {reason:?}"))?;
+            let (f, _) = inbox.get(signer, &patch_id).map_err(perr)?;
+            let repo = patch_repo(state, &f.envelope.export_id).ok();
+            let receipt = inbox
+                .reject(signer, &patch_id, reason, repo.as_deref(), now_ms())
+                .map_err(perr)?;
+            tell_author(
+                &device,
+                &f.envelope.author,
+                json!({"type": "bp-zone-fs-patch-outcome-v1", "patch_id": patch_id, "outcome": "rejected", "reason": reason.as_str(), "receipt": receipt}),
+            );
+            println!(
+                "{}",
+                json!({"patch_id": patch_id, "reason": reason.as_str(), "receipt": receipt})
+            );
+            Ok(())
+        }
     }
 }
 
@@ -1351,6 +1666,70 @@ mod tests {
             TargetCli::try_parse_from(["aly", "rm", "x"]).is_err(),
             "no write op"
         );
+    }
+
+    #[test]
+    fn coding_session_commands_parse() {
+        let base = "a".repeat(40);
+        let c = TargetCli::try_parse_from([
+            "aly",
+            "patch",
+            "core",
+            "fix.diff",
+            "--base",
+            &base,
+            "--check",
+            "cargo test=pass",
+            "--pr",
+            "https://github.com/acme/app/pull/7",
+        ])
+        .unwrap();
+        match c.op {
+            Op::Patch {
+                label,
+                file,
+                base: b,
+                checks,
+                pr,
+            } => {
+                assert_eq!(label, "core");
+                assert_eq!(file, PathBuf::from("fix.diff"));
+                assert_eq!(b, base);
+                assert_eq!(checks, ["cargo test=pass"]);
+                assert!(pr.is_some());
+            }
+            _ => panic!("not patch"),
+        }
+        assert!(
+            TargetCli::try_parse_from(["aly", "patch", "core", "fix.diff"]).is_err(),
+            "a patch names its base"
+        );
+        let c = TargetCli::try_parse_from(["aly", "ask", "core", "which retry policy?"]).unwrap();
+        assert!(matches!(c.op, Op::Ask { ref question, .. } if question == "which retry policy?"));
+
+        #[derive(clap::Parser)]
+        struct Top {
+            #[command(subcommand)]
+            fs: FsCommand,
+        }
+        let t = Top::try_parse_from([
+            "zone",
+            "inbox",
+            "review",
+            "zfp_abc",
+            "--check",
+            "test=cargo test --locked",
+        ])
+        .unwrap();
+        assert!(matches!(
+            t.fs,
+            FsCommand::Inbox { command: InboxCommand::Review { ref checks, .. } } if checks == &["test=cargo test --locked"]
+        ));
+        assert!(
+            Top::try_parse_from(["zone", "inbox", "review", "zfp_abc"]).is_err(),
+            "review needs an owner check"
+        );
+        assert!(Top::try_parse_from(["zone", "inbox", "accept", "zfp_abc"]).is_ok());
     }
 
     #[test]

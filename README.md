@@ -446,6 +446,26 @@ leaves a signed tombstone. The members it is for get each change as a signed eve
 they can open. `zone fs serve` checks shared files on every read, so one made owner-only or
 ignored after publishing stops being readable at once.
 
+```sh
+zone fs grant <pseudonym> core --ops metadata,read,grep,find,patch   # the owner: allow patches
+zone fs <agent> patch core fix.diff --base <commit> --check 'cargo test=pass'
+zone fs <agent> ask core 'Which retry policy should turn.rs use?'
+zone fs inbox list                                        # the owner: what came in
+zone fs inbox show <patch id> --diff
+zone fs inbox review <patch id> --check 'test=cargo test --locked'
+zone fs inbox accept <patch id>                           # or: zone fs inbox reject <patch id>
+```
+
+Coding work on someone else's export comes back as a patch, never as a write. `zone fs <agent>
+patch` signs the patch with your device and sends it on the zone fs session under a live grant
+that names `patch`. The owner's machine checks the signature, that the grant is yours and live,
+that every path the patch touches is inside the grant and off the deny-list, then files it in its
+inbox; nothing is applied. The owner reviews it in a fresh git worktree at its base with its own
+checks (the checks you claim are recorded, never trusted), and only an explicit `accept` after
+checks that all passed signs an accepted-patch receipt with a payment reference, once per patch.
+Accept and reject each send the author the signed receipt in a note. `zone fs <agent> ask` sends
+the owner a question about the export as a note to that member alone.
+
 Errors start with a stable code: `fs-agent-not-found`, `fs-agent-ambiguous`,
 `fs-export-not-found` (also what a member without a grant sees), `fs-denied` (missing, hidden or
 outside the grant: the reader cannot tell which), `fs-grant-expired`, `fs-grant-revoked`,
