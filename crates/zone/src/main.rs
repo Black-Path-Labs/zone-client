@@ -9,7 +9,9 @@ use clap::{Parser, Subcommand};
 
 mod backoff;
 mod device;
+#[cfg(unix)]
 mod fs;
+#[cfg(unix)]
 mod fsmount;
 mod items;
 mod join;
@@ -206,12 +208,14 @@ enum Command {
     /// Browse and search the source trees other members export to you (`zone fs <agent> ls|cat|
     /// tree|stat|grep|find`), and export, grant and serve your own. Read-only; runs on the
     /// exporter's host.
+    #[cfg(unix)]
     Fs {
         #[command(subcommand)]
         command: fs::FsCommand,
     },
     /// Publish a file or folder of one of your exports under a stable name (`zone share NAME
     /// PATH`), list your shares, or remove one. Readers use the name as a path.
+    #[cfg(unix)]
     Share {
         #[command(subcommand)]
         command: fs::ShareCommand,
@@ -599,10 +603,12 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
             items::get(&state, &id, &output, force, !no_receipt)?;
             Ok(ExitCode::SUCCESS)
         }
+        #[cfg(unix)]
         Command::Share { command } => {
             fs::share_command(&state, command)?;
             Ok(ExitCode::SUCCESS)
         }
+        #[cfg(unix)]
         Command::Fs { command } => {
             fs::command(&state, command)?;
             Ok(ExitCode::SUCCESS)

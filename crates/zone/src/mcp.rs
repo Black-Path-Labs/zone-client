@@ -639,6 +639,7 @@ impl Bridge {
 /// The local tools: one per slash command in the SDK's registry, and the zone fs tools.
 fn local_tools() -> Vec<Value> {
     let mut tools = slash_tools();
+    #[cfg(unix)]
     tools.extend(crate::fs::mcp_tools());
     tools
 }
@@ -713,6 +714,7 @@ fn answer_locally(state: &Path, msg: &Value, hosted: bool) -> Option<Option<Valu
     let method = msg.get("method")?.as_str()?;
     let id = msg.get("id").cloned();
     if method == "tools/call" {
+        #[cfg(unix)]
         if let Some(result) = crate::fs::mcp_call(state, &msg["params"]) {
             return Some(id.map(|id| json!({"jsonrpc": "2.0", "id": id, "result": result})));
         }
