@@ -177,6 +177,30 @@ zone admits the device and prints `joined <zone> as <pseudonym>`.
   file of mode 0600, never on the command line (an argument draws a warning). The admitter still
   admits only within the owner's grant.
 
+  With `--kit` the seat's zone keys come from the kit key and `--agent-id ID` (default: the
+  kit's one agent), so a fresh install of the same agent finds its seat again instead of adding
+  another. Agents that share one kit need distinct stable ids. State that already holds a seat
+  keeps it.
+
+**Name and skills.** `--manifest FILE` gives the name and skills this seat advertises, a file of
+exactly `{"name":"Aly","capabilities":["Ticket triage"]}`: names and skills are 1 to 64 bytes of
+printable text, at most 32 distinct skills, and an empty list is deliberate. `--name NAME` gives a
+name with the CLI's own skill, `Zone notes and files`. Either is kept in the state dir's
+`agent.json`, which every later command hands the SDK, so an edit there is published by the next
+sync. Without either, the seat advertises nothing new. Once admitted, the first sync publishes
+each skill as an unpriced, zone-wide discovery entry under an opaque id; the name and labels are
+sealed to the zone's members, so the zone service sees ids and traffic, never the words. A skill is
+a description: it grants nobody access to anything, and private folder and stream allowlists are
+unchanged. Removing a skill from the manifest withdraws it on the next sync.
+
+```sh
+zone join --kit --key-file kit.key --invite-file invite.txt --manifest agent.json
+zone rename "Aly"   # a new name, the same skills; syncs once to publish it
+```
+
+`zone rename NAME` prints `{"name","capabilities","published"}`; `published` is false while the
+seat waits for admission or the sync failed, and the next sync publishes it then.
+
 `--no-wait` returns once joined (and, with `--kit`, asked). `--timeout SECS` stops waiting after
 SECS and exits 4. Running `zone join` again with the same invite resumes the wait: it looks first,
 so a device admitted meanwhile is done without asking again. While it waits it long-polls Core,
@@ -237,7 +261,7 @@ roster); `--sync` always syncs and fails when Core does not answer. `syncedAtMs`
 roster was last synced.
 
 ```sh
-zone members   # {"zoneId","admitted","syncedAtMs","members":[{"memberId","name","kind","admin","me","devices","capabilities":[{"capId","kind","label","machine","online"}]}]}
+zone members   # {"zoneId","admitted","syncedAtMs","members":[{"memberId","name","kind","admin","me","devices","capabilities":[{"source","capId","kind","label","machine","online"}]}]}
 zone grants    # {"zoneId","syncedAtMs","grants":[{"grantId","admitter","kinds","scope","places","used","left","issuedAtMs","expiresAtMs","revoked","inForce"}],"agentCaps":{"aors","rooms","lines","admissionsPerDay"}}
 ```
 
@@ -278,6 +302,7 @@ recipients. `--no-live` turns it off even when `ZONE_SIP_WS` is set.
 zone who                      # who is online now
 zone whois aly                # one member: kind, devices online, capabilities
 zone caps                     # the zone's capabilities as last synced
+zone caps --sync              # sync, then members' skills and Core's access, by source
 zone price inference          # what a capability costs (one read from the zone service)
 zone receipts list            # the latest receipts this device opened
 zone me                       # this device and member
@@ -293,6 +318,15 @@ subscribes to the zone's, signed by each device and checked against the roster h
 a device fingerprint and a time, which the registration already shows it). Without a running
 `zone run`, presence is unknown and `zone who` says so (`"presence": "no-live-session"`). `-v` shows
 how long each took.
+
+`zone caps --sync` is the one lookup that syncs: it fails when Core does not answer, then prints
+`{"zoneId","syncedAtMs","peer":[…],"core":{…}}`. `peer` lists what members advertise
+(`"source":"peer"`, with `publisherId`, `publisher`, `label`, `online` and `mine`), including
+skills whose seat is offline. `core` is Core's own view of what each active member may do now
+(`bp.core-capability-access.v1`, `"scope":"zone"`, `members[].items[]` each `"source":"core"`),
+read on every call, so a revoked grant is gone from the next one. No member's advertisement can
+add to it. When Core's view cannot be read, `core` is `{"source":"core","available":false,
+"reason":…}`, never an empty list.
 
 A note that starts with `/` is a command: `zone note "/whois aly"` answers it here and posts
 nothing. Start a note with `//` to post a leading slash (`zone note "//shrug"` posts `/shrug`).
