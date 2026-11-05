@@ -13,6 +13,7 @@ mod device;
 mod fs;
 #[cfg(unix)]
 mod fsmount;
+mod head;
 mod items;
 mod join;
 mod links;
@@ -248,6 +249,26 @@ enum Command {
         #[arg(required = true, num_args = 1..)]
         member: Vec<String>,
     },
+    /// What a member is working on now (`/head`): with no option, this member's head, or
+    /// MEMBER's as this device last heard it. With `--set STATE`, `--focus`, `--next`, `--task`,
+    /// `--blocked-on`, `--private` or `--public`, set this member's head through the running
+    /// `zone run`, which pushes it sealed to every member when it changed (never to Core).
+    /// `--watch` prints every head change the run takes as JSON lines.
+    Head {
+        /// A pseudonym, a pseudonym prefix of 6 or more characters, or a name or its start.
+        member: Vec<String>,
+        #[command(flatten)]
+        set: head::SetArgs,
+        /// Print each head change as it arrives (JSON lines), until interrupted.
+        #[arg(long, conflicts_with_all = ["set", "task", "focus", "next", "blocked_on", "private", "public", "reset"])]
+        watch: bool,
+        /// With `--watch`: only these states (repeatable).
+        #[arg(long = "only-state", requires = "watch", value_name = "STATE")]
+        only_state: Vec<String>,
+    },
+    /// What everyone in the zone is working on (`/heads`), from the heads the running `zone run`
+    /// holds.
+    Heads,
     /// The zone's capabilities as last synced (`/caps`).
     Caps,
     /// What a capability costs (`/price`): one Core read, by kind, id or tag.
@@ -540,6 +561,29 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
             slash::run(&state, &format!("/whois {}", member.join(" ")))?;
             Ok(ExitCode::SUCCESS)
         }
+        Command::Head {
+            member,
+            set,
+            watch,
+            only_state,
+        } => {
+            if watch {
+                let members = head_members(&state, &member)?;
+                head::watch(&state, &members, &only_state)?;
+            } else if set.any() {
+                if !member.is_empty() {
+                    return Err("head: set only your own head (drop MEMBER)".into());
+                }
+                head::set(&state, &set)?;
+            } else {
+                slash::run(&state, format!("/head {}", member.join(" ")).trim_end())?;
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Heads => {
+            slash::run(&state, "/heads")?;
+            Ok(ExitCode::SUCCESS)
+        }
         Command::Caps => {
             slash::run(&state, "/caps")?;
             Ok(ExitCode::SUCCESS)
@@ -807,4 +851,16 @@ fn whoami(state: &std::path::Path, kit: Option<&secret::KitKey>) -> Result<(), S
         println!("kit: {}", k.fingerprint());
     }
     Ok(())
+}
+
+/// `zone head --watch MEMBER`: the one member MEMBER names, as `/whois` matches it.
+fn head_members(state: &std::path::Path, member: &[String]) -> Result<Vec<String>, String> {
+    if member.is_empty() {
+        return Ok(vec![]);
+    }
+    let r = slash::answer(state, &format!("/whois {}", member.join(" ")))?;
+    match r.json["member"]["memberId"].as_str() {
+        Some(id) if r.ok => Ok(vec![id.to_owned()]),
+        _ => Err(format!("head: {}", r.text)),
+    }
 }

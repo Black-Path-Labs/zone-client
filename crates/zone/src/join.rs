@@ -86,6 +86,7 @@ pub fn kind(e: &ZoneError) -> String {
         ZoneError::NotComplete => "not-complete".into(),
         ZoneError::RelayQuota { .. } => "relay-quota".into(),
         ZoneError::Rep { code } => code.clone(),
+        ZoneError::BadHead { .. } => "bad-head".into(),
     }
 }
 

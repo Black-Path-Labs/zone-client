@@ -431,3 +431,103 @@ fn who_reads_the_presence_the_running_sessions_publish() {
         rows.join("\n")
     );
 }
+
+#[test]
+#[ignore = "needs a Core"]
+fn a_head_reaches_the_other_running_seat_and_never_the_zone_service() {
+    let core = std::env::var("ZONE_TEST_CORE").expect("ZONE_TEST_CORE names a zone service");
+    let tmp = tempfile::tempdir().unwrap();
+    let owner = ZoneDevice::open(
+        tmp.path().join("owner").to_string_lossy().into_owned(),
+        "Owner".into(),
+        core,
+        "ca-mb-1".into(),
+        Arc::new(TestVault),
+        Arc::new(PlainTransport),
+    )
+    .unwrap();
+    owner.create_zone("Heads".into(), None).unwrap();
+    let a = seat(&owner, tmp.path(), "a");
+    let b = seat(&owner, tmp.path(), "b");
+    owner.sync(0).unwrap();
+
+    // No run: setting a head says why it cannot.
+    let out = zone(&a)
+        .args(["head", "--set", "working"])
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("zone run"));
+
+    let edge = edge();
+    let (run_a, err_a) = run(&a, &edge);
+    let (run_b, err_b) = run(&b, &edge);
+    wait_for(&err_a, "live: registered", Duration::from_secs(20));
+    wait_for(&err_b, "live: registered", Duration::from_secs(20));
+    let mut watch = zone(&b)
+        .args(["head", "--watch"])
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let (tx, lines) = mpsc::channel();
+    let stdout = watch.stdout.take().unwrap();
+    std::thread::spawn(move || {
+        for l in BufReader::new(stdout).lines().map_while(Result::ok) {
+            let _ = tx.send(l);
+        }
+    });
+    std::thread::sleep(Duration::from_millis(300));
+
+    let set = |args: &[&str]| -> serde_json::Value {
+        let out = zone(&a).arg("head").args(args).output().unwrap();
+        assert!(out.status.success(), "{out:?}");
+        serde_json::from_slice(&out.stdout).unwrap()
+    };
+    let started = Instant::now();
+    let r = set(&["--set", "working", "--task", "T-1", "--focus", "heads"]);
+    assert_eq!(
+        (r["changed"].as_bool(), r["pushed"].as_bool()),
+        (Some(true), Some(true)),
+        "{r}"
+    );
+    let got: serde_json::Value =
+        serde_json::from_str(&lines.recv_timeout(Duration::from_secs(5)).unwrap()).unwrap();
+    assert_eq!(
+        (got["focus"].as_str(), got["me"].as_bool()),
+        (Some("heads"), Some(false))
+    );
+    eprintln!(
+        "head seen by the other seat {} ms after `zone head` started",
+        started.elapsed().as_millis()
+    );
+    // Unchanged: nothing sent. A field left out keeps its value.
+    assert_eq!(set(&["--set", "working"])["changed"], false);
+    set(&["--set", "blocked", "--blocked-on", "review"]);
+    let got: serde_json::Value =
+        serde_json::from_str(&lines.recv_timeout(Duration::from_secs(5)).unwrap()).unwrap();
+    assert_eq!(
+        (got["state"].as_str(), got["taskId"].as_str()),
+        (Some("blocked"), Some("T-1"))
+    );
+    // Private: the other seat sees busy and nothing more.
+    set(&["--private"]);
+    let got: serde_json::Value =
+        serde_json::from_str(&lines.recv_timeout(Duration::from_secs(5)).unwrap()).unwrap();
+    assert_eq!(
+        (got["state"].as_str(), got["focus"].as_str()),
+        (Some("busy"), None)
+    );
+    let heads: serde_json::Value =
+        serde_json::from_slice(&zone(&b).arg("heads").output().unwrap().stdout).unwrap();
+    assert_eq!(heads["heads"].as_array().unwrap().len(), 1, "{heads}");
+    let who: serde_json::Value =
+        serde_json::from_slice(&zone(&b).arg("who").output().unwrap().stdout).unwrap();
+    assert_eq!(who["heads"][0]["state"], "busy", "{who}");
+
+    let _ = watch.kill();
+    let _ = watch.wait();
+    stop(run_a);
+    stop(run_b);
+    // Nothing reached the zone service: the owner's sync brings no new item.
+    assert!(owner.sync(0).unwrap().new_items.is_empty());
+}
