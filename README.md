@@ -295,9 +295,51 @@ a device fingerprint and a time, which the registration already shows it). Witho
 `zone run`, presence is unknown and `zone who` says so (`"presence": "no-live-session"`). `-v` shows
 how long each took.
 
+## Heads: what each member is working on now
+
+```sh
+zone head --set working --task T-12 --focus "zone head docs" --next "open the PR"
+zone head --set blocked --blocked-on "review from Aly"   # keeps the task, focus and next step
+zone head --private                                      # members see only busy or idle
+zone head                                                # this member's head
+zone head aly                                            # Aly's head, as this device last heard it
+zone heads                                               # every member's head
+zone head --watch                                        # each change as a JSON line
+```
+
+A head is a task id, a one-line focus, the next step, a state (`working`, `blocked`, `waiting`
+or `idle`) and what blocks it, with the time it last changed: at most 280 characters of text.
+Setting one needs a running `zone run` on the same state dir: the session seals the head to every
+member's devices and pushes it over the live session, only when it changed. It sends it again
+with each registration refresh, and once registered it says hello, and members holding a head
+answer with theirs. A head never goes to the zone service: it is not posted, and the service
+refuses it. `zone who` lists each member's head line; `--private` keeps everything but busy or
+idle on this device. `--watch` lines carry `appliedMs`, when this run took the change.
+
 A note that starts with `/` is a command: `zone note "/whois aly"` answers it here and posts
 nothing. Start a note with `//` to post a leading slash (`zone note "//shrug"` posts `/shrug`).
-`zone mcp` offers the same commands as local tools (`zone_who`, `zone_whois`, … `zone_help`).
+`zone mcp` offers the same commands as local tools (`zone_who`, `zone_whois`, … `zone_help`),
+and `zone_head_set`, which sets this member's head through the running `zone run`.
+
+## First run: three questions
+
+Once `zone join` sees this device admitted, it prints the zone rep's first question. There are
+three: what you want to do in the zone, your name or handle, and what you bring or want. Each is
+skippable, and nothing they ask adds to the join.
+
+```sh
+zone onboard ship a podcast   # answer the current question
+zone onboard skip             # skip this one; `zone onboard skip all` ends the questions
+zone onboard yes              # publish the draft profile it shows; anything else publishes nothing
+zone onboard                  # start the questions again
+zone profile                  # your published profile; `zone profile off` withdraws it
+```
+
+The answers stay on this device until you say yes to the exact draft. Then the profile goes to
+the zone's members, sealed like a note. Either way, the last answer prints something useful to
+start with: matching capabilities when you said what you need, else who is online and the latest
+notes, plus two commands to try. Through `zone mcp` the same steps are the `zone_onboard` tool
+(`answer`) and `zone_profile` (`off`); a host passes on the member's own words, never its own.
 
 ## Notes and files
 
@@ -536,6 +578,7 @@ consent. Every participant prints `recording: on` or `recording: off` on stderr 
 | Streams  | that a session ran, between which pseudonyms, its byte counts, duration and path        | the bytes, the media, the signed stream receipts  |
 | Rooms    | the room's name and settings, who joined and left and when, how much media flowed       | the media, the data messages, the room keys       |
 | Recording | nothing: it runs on the recording member's device                                      | the recording, the consents                       |
+| Heads    | nothing: heads travel only over the live session; the edge sees sealed bytes and timing | the head                                          |
 
 ## Limits
 
@@ -547,6 +590,7 @@ consent. Every participant prints `recording: on` or `recording: off` on stderr 
 | A resumable large file          | 1 GiB, and the relay must hold it per device       |
 | A live file (`--live`)          | none; both members online                          |
 | A room data message             | 128 KiB                                            |
+| A head                          | 280 characters of text, one line per field         |
 
 ## Receipts
 

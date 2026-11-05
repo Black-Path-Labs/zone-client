@@ -15,7 +15,9 @@
 //! `zone_whois`, … `zone_help`, answered from this machine's joined zone device (and the presence
 //! a running `zone run` holds), never by the hosted server: it is custodial and cannot open the
 //! sealed roster. They join the hosted server's `tools/list`; with a joined device and no
-//! `zone mcp login`, they are served alone.
+//! `zone mcp login`, they are served alone. `zone_head_set` is local too: it sets this member's
+//! head through the running `zone run` (head.rs), so an agent says what it is on when its task or
+//! state changes, with no turn spent on it otherwise.
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -639,6 +641,7 @@ impl Bridge {
 /// The local tools: one per slash command in the SDK's registry, and the zone fs tools.
 fn local_tools() -> Vec<Value> {
     let mut tools = slash_tools();
+    tools.push(head_set_tool());
     #[cfg(unix)]
     tools.extend(crate::fs::mcp_tools());
     tools
@@ -657,8 +660,30 @@ fn slash_tools() -> Vec<Value> {
                     json!({"capability": {"type": "string", "description": "A capability kind, id or tag"}}),
                     json!(["capability"]),
                 ),
+                "note" => (
+                    json!({"text": {"type": "string", "description": "The note to post"}}),
+                    json!(["text"]),
+                ),
+                "onboard" => (
+                    json!({"answer": {"type": "string", "description": "The member's own answer to the current step, word for word: text, skip or skip all for a question; yes or no for the draft. Omit to start the questions again. Never answer for the member."}}),
+                    json!([]),
+                ),
+                "profile" => (
+                    json!({"off": {"type": "boolean", "description": "Withdraw the member's profile"}}),
+                    json!([]),
+                ),
+                "rep" => (
+                    json!({"off": {"type": "boolean", "description": "Revoke this device's zone rep session now"}}),
+                    json!([]),
+                ),
+                "head" => (
+                    json!({"member": {"type": "string", "description": "A pseudonym, a pseudonym prefix of 6 or more characters, or a name or its start; leave out for your own head"}}),
+                    json!([]),
+                ),
                 _ => (json!({}), json!([])),
             };
+            // These write in the member's name: a note, a profile on yes, a withdrawal.
+            let writes = matches!(c.name, "note" | "onboard" | "profile" | "rep");
             json!({
                 "name": format!("zone_{}", c.name),
                 "description": format!(
@@ -668,10 +693,76 @@ fn slash_tools() -> Vec<Value> {
                     if c.core { "" } else { "; reads local state only" }
                 ),
                 "inputSchema": {"type": "object", "properties": props, "required": required},
-                "annotations": {"readOnlyHint": true, "openWorldHint": c.core},
+                "annotations": {"readOnlyHint": !writes, "openWorldHint": c.core},
             })
         })
         .collect()
+}
+
+/// `zone_head_set`: set this member's head through the running `zone run`, as `zone head` does.
+fn head_set_tool() -> Value {
+    let text = |d: &str| json!({"type": "string", "description": d});
+    json!({
+        "name": "zone_head_set",
+        "description": "Set what you are working on now (your head), sent sealed to every zone member over the running `zone run` when it changes; never to the zone service. Fields left out keep their value. Call it when your task or state changes, not on every turn.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "state": {"type": "string", "enum": ["working", "blocked", "waiting", "idle"]},
+                "task": text("The task board id you are on"),
+                "focus": text("One line: what you are doing now"),
+                "next": text("One line: the next step"),
+                "blocked_on": text("One line: what blocks you (with state blocked)"),
+                "private": {"type": "boolean", "description": "Members see only busy or idle"},
+                "reset": {"type": "boolean", "description": "Start from an empty head"},
+            },
+            "required": [],
+        },
+        "annotations": {"readOnlyHint": false, "openWorldHint": false},
+    })
+}
+
+/// A `zone_head_set` call's result.
+fn head_set_call(state: &Path, args: &Value) -> Value {
+    let mut req = json!({});
+    for k in ["state", "task", "focus", "next", "blocked_on"] {
+        if let Some(v) = args[k].as_str() {
+            req[k] = json!(v);
+        }
+    }
+    match args["private"].as_bool() {
+        Some(true) => req["private"] = json!(true),
+        Some(false) => req["public"] = json!(true),
+        None => {}
+    }
+    req["reset"] = json!(args["reset"].as_bool() == Some(true));
+    match crate::head::set_value(state, &req) {
+        Ok(r) => json!({
+            "content": [{"type": "text", "text": bp_zone_core::head::line(&head_of(&r["head"]))}],
+            "structuredContent": r,
+            "isError": false,
+        }),
+        Err(e) => json!({"content": [{"type": "text", "text": e}], "isError": true}),
+    }
+}
+
+/// The head in `zone run`'s answer, back as the SDK's record (for its one-line form).
+fn head_of(v: &Value) -> bp_zone_core::head::Head {
+    let text = |k: &str| v[k].as_str().map(str::to_owned);
+    bp_zone_core::head::Head {
+        member_id: text("memberId").unwrap_or_default(),
+        name: text("name").unwrap_or_default(),
+        me: true,
+        fingerprint: String::new(),
+        state: text("state").unwrap_or_default(),
+        private: v["private"].as_bool().unwrap_or(false),
+        task_id: text("taskId"),
+        focus: text("focus"),
+        next: text("next"),
+        blocked_on: text("blockedOn"),
+        updated_ms: v["updatedMs"].as_u64().unwrap_or(0),
+        seen_ms: v["seenMs"].as_u64().unwrap_or(0),
+    }
 }
 
 /// The command line a local tool call stands for, or None when it is not a local tool.
@@ -679,10 +770,13 @@ fn local_line(params: &Value) -> Option<String> {
     let name = params["name"].as_str()?.strip_prefix("zone_")?;
     let spec = commands::spec(name)?;
     let arg = match spec.name {
-        "whois" => params["arguments"]["member"].as_str().unwrap_or_default(),
+        "whois" | "head" => params["arguments"]["member"].as_str().unwrap_or_default(),
         "price" => params["arguments"]["capability"]
             .as_str()
             .unwrap_or_default(),
+        "note" => params["arguments"]["text"].as_str().unwrap_or_default(),
+        "onboard" => params["arguments"]["answer"].as_str().unwrap_or_default(),
+        "profile" | "rep" if params["arguments"]["off"] == json!(true) => "off",
         _ => "",
     };
     Some(format!("/{} {arg}", spec.name).trim_end().to_owned())
@@ -716,6 +810,10 @@ fn answer_locally(state: &Path, msg: &Value, hosted: bool) -> Option<Option<Valu
     if method == "tools/call" {
         #[cfg(unix)]
         if let Some(result) = crate::fs::mcp_call(state, &msg["params"]) {
+            return Some(id.map(|id| json!({"jsonrpc": "2.0", "id": id, "result": result})));
+        }
+        if msg["params"]["name"] == json!("zone_head_set") {
+            let result = head_set_call(state, &msg["params"]["arguments"]);
             return Some(id.map(|id| json!({"jsonrpc": "2.0", "id": id, "result": result})));
         }
         if let Some(line) = local_line(&msg["params"]) {
@@ -945,8 +1043,8 @@ mod tests {
         assert_eq!(tools.len(), commands::COMMANDS.len());
         assert_eq!(
             local_tools().len(),
-            commands::COMMANDS.len() + 4,
-            "and the zone fs tools"
+            commands::COMMANDS.len() + 1 + 4,
+            "plus zone_head_set and the zone fs tools"
         );
         assert_eq!(tools[1]["inputSchema"]["required"], json!(["member"]));
         let line = |name: &str, args: Value| local_line(&json!({"name": name, "arguments": args}));
@@ -959,6 +1057,42 @@ mod tests {
             line("zone_price", json!({"capability": "inference"})).as_deref(),
             Some("/price inference")
         );
+        assert_eq!(
+            line("zone_onboard", json!({"answer": "skip all"})).as_deref(),
+            Some("/onboard skip all")
+        );
+        assert_eq!(line("zone_onboard", json!({})).as_deref(), Some("/onboard"));
+        assert_eq!(
+            line("zone_profile", json!({"off": true})).as_deref(),
+            Some("/profile off")
+        );
+        assert_eq!(line("zone_profile", json!({})).as_deref(), Some("/profile"));
+        assert_eq!(
+            line("zone_note", json!({"text": "hi"})).as_deref(),
+            Some("/note hi")
+        );
+        // A tool that can publish in the member's name is not marked read-only.
+        for t in &tools {
+            let writes = ["zone_note", "zone_onboard", "zone_profile", "zone_rep"]
+                .contains(&t["name"].as_str().unwrap());
+            assert_eq!(
+                t["annotations"]["readOnlyHint"],
+                json!(!writes),
+                "{}",
+                t["name"]
+            );
+        }
+        assert_eq!(
+            line("zone_head", json!({"member": "Aly"})).as_deref(),
+            Some("/head Aly")
+        );
+        assert_eq!(line("zone_head", json!({})).as_deref(), Some("/head"));
+        assert_eq!(line("zone_heads", json!({})).as_deref(), Some("/heads"));
+        assert_eq!(
+            line("zone_rep", json!({"off": true})).as_deref(),
+            Some("/rep off")
+        );
+        assert_eq!(line("zone_rep", json!({})).as_deref(), Some("/rep"));
         assert_eq!(line("zone_join", json!({})), None, "a hosted tool goes on");
     }
 
@@ -970,7 +1104,10 @@ mod tests {
         assert_eq!(r["result"]["protocolVersion"], "2025-03-26");
         let list = json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"});
         let r = answer_locally(tmp.path(), &list, false).unwrap().unwrap();
-        assert_eq!(r["result"]["tools"].as_array().unwrap().len(), 8 + 4);
+        assert_eq!(
+            r["result"]["tools"].as_array().unwrap().len(),
+            commands::COMMANDS.len() + 1 + 4
+        );
         let note = json!({"jsonrpc": "2.0", "method": "notifications/initialized"});
         assert_eq!(answer_locally(tmp.path(), &note, false), Some(None));
         // With a hosted server, only the local tools' calls stay here.

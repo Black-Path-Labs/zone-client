@@ -16,6 +16,12 @@
 //! `zone who` reads through `live.sock` (`{"cmd": LINE}`); the view is cleared when the session
 //! drops.
 //!
+//! Head beats (`zone head`): the session pushes this member's sealed head as a MESSAGE when it
+//! changes, again with every REGISTER refresh (a keepalive), and once registered a `hello` that
+//! members holding a head answer with theirs. A head another member pushes goes to the SDK
+//! (`take_head`) before anything else; `zone head --watch` streams the changes over `live.sock`
+//! (`{"watch": FILTER}`) through the SDK's `on_head`. A head is never posted to Core.
+//!
 //! The edge sees the zone's address, sealed bytes, sizes and timing; nothing here logs a body.
 
 use std::collections::HashMap;
@@ -178,7 +184,7 @@ impl Live {
     }
 
     /// Push a sealed body to the zone's other devices. True when the edge took it (2xx).
-    fn push(&self, body: &str) -> bool {
+    pub(crate) fn push(&self, body: &str) -> bool {
         if !self.up.load(Ordering::SeqCst) || body.len() > MAX_LIVE_BODY_BYTES {
             return false;
         }
@@ -206,6 +212,7 @@ fn session(device: &ZoneDevice, args: &LiveArgs, live: &Live, rx: &mpsc::Receive
         let result = serve(device, args, live, rx);
         live.up.store(false, Ordering::SeqCst);
         device.clear_presence();
+        device.clear_heads();
         let Err(e) = result else { return };
         let wait = backoff.failed("live", OsRng.next_u64());
         // One line per outage, not one per retry.
@@ -308,6 +315,7 @@ fn serve(
     let mut presence = Presence::default();
     presence.publish(device, &mut ws, &leg, &aor, &edge.domain)?;
     presence.subscribe(&mut ws, &leg, &aor)?;
+    beat(device, &mut ws, &leg, &aor, "hello")?;
     let mut refresh = Instant::now() + REFRESH;
     let mut ping = Instant::now() + KEEPALIVE;
     let mut waiting: HashMap<String, (mpsc::Sender<u16>, Instant)> = HashMap::new();
@@ -331,6 +339,7 @@ fn serve(
             send(&mut ws, leg.register(&fresh, EXPIRES, USER_AGENT))?;
             presence.publish(device, &mut ws, &leg, &aor, &edge.domain)?;
             presence.subscribe(&mut ws, &leg, &aor)?;
+            beat(device, &mut ws, &leg, &aor, "keepalive")?;
             refresh = now + REFRESH;
         }
         if now >= ping {
@@ -356,8 +365,28 @@ fn serve(
             }
             continue;
         }
-        take(device, live, &mut ws, &m)?;
+        take(device, live, &mut ws, &leg, &aor, &m)?;
     }
+}
+
+/// Push this member's `keepalive`, `hello` or `reply` head beat, when the SDK has one to send.
+/// A head that cannot be sealed (not admitted yet) sends nothing.
+fn beat(
+    device: &ZoneDevice,
+    ws: &mut Socket,
+    leg: &LiveLeg,
+    aor: &str,
+    kind: &str,
+) -> Result<(), String> {
+    match device.head_beat(kind.to_owned()) {
+        Ok(Some(body)) if body.len() <= MAX_LIVE_BODY_BYTES => {
+            send(ws, leg.message(aor, &body).0)?;
+            trace(&format!("live: head {kind} sent"));
+        }
+        Ok(_) => {}
+        Err(e) => trace(&format!("live: no head {kind} ({})", crate::join::kind(&e))),
+    }
+    Ok(())
 }
 
 fn send_ping(ws: &mut Socket) -> Result<(), String> {
@@ -369,7 +398,14 @@ fn send_ping(ws: &mut Socket) -> Result<(), String> {
 }
 
 /// A request from the edge: answer first, then hand a push to the SDK.
-fn take(device: &ZoneDevice, live: &Live, ws: &mut Socket, m: &Message) -> Result<(), String> {
+fn take(
+    device: &ZoneDevice,
+    live: &Live,
+    ws: &mut Socket,
+    leg: &LiveLeg,
+    aor: &str,
+    m: &Message,
+) -> Result<(), String> {
     match m.method() {
         Some("ACK") | None => return Ok(()),
         // This session serves no calls: the uniform refusal.
@@ -389,6 +425,29 @@ fn take(device: &ZoneDevice, live: &Live, ws: &mut Socket, m: &Message) -> Resul
     let Some(body) = m.live_body() else {
         return Ok(());
     };
+    let started = Instant::now();
+    match device.take_head(body.to_owned()) {
+        Ok(Some(u)) => {
+            if let Some(h) = &u.head {
+                // Who and when, never what.
+                trace(&format!(
+                    "live: head from {} at {}, taken in {} ms",
+                    h.member_id,
+                    now_ms(),
+                    started.elapsed().as_millis()
+                ));
+            }
+            if u.reply {
+                beat(device, ws, leg, aor, "reply")?;
+            }
+            return Ok(());
+        }
+        Ok(None) => {}
+        Err(e) => {
+            trace(&format!("live: head not taken ({})", crate::join::kind(&e)));
+            return Ok(());
+        }
+    }
     match device.take_live(body.to_owned()) {
         Ok(Some(s)) => {
             for i in &s.new_items {
@@ -488,7 +547,7 @@ impl Presence {
 }
 
 /// The note socket's path in `state`.
-fn socket_path(state: &Path) -> PathBuf {
+pub(crate) fn socket_path(state: &Path) -> PathBuf {
     state.join(SOCKET)
 }
 
@@ -540,6 +599,12 @@ fn answer_note(conn: UnixStream, device: &ZoneDevice, live: &Live) -> std::io::R
     BufReader::new(&conn).read_line(&mut line)?;
     let start = Instant::now();
     let reply = match serde_json::from_str::<Value>(&line) {
+        Ok(req) if req.get("head").is_some() => {
+            crate::head::answer_set(device, live, &req["head"], start)
+        }
+        Ok(req) if req.get("watch").is_some() => {
+            return crate::head::answer_watch(conn, device, &req["watch"]);
+        }
         Ok(req) if req["cmd"].is_string() => {
             match device.run_command(req["cmd"].as_str().unwrap_or_default().to_owned()) {
                 Ok(r) => crate::slash::wire(r),

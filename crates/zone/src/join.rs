@@ -85,6 +85,8 @@ pub fn kind(e: &ZoneError) -> String {
         ZoneError::BadRecipients { .. } => "bad-recipients".into(),
         ZoneError::NotComplete => "not-complete".into(),
         ZoneError::RelayQuota { .. } => "relay-quota".into(),
+        ZoneError::Rep { code } => code.clone(),
+        ZoneError::BadHead { .. } => "bad-head".into(),
     }
 }
 
@@ -273,6 +275,13 @@ fn admitted(device: &ZoneDevice, zone_id: &str) -> Result<Outcome, String> {
             .ok_or("admitted, but the roster does not list this device yet")?,
     };
     println!("joined {zone_id} as {pseudonym}");
+    // The zone rep's first question, once per zone. It starts only now, after the joined state,
+    // and makes no request; the answers stay on this device until a yes.
+    if let Ok(step) = device.onboard_start(false) {
+        if step.stage == "question" {
+            println!("{}\nanswer with: zone onboard ANSWER", step.prompt);
+        }
+    }
     Ok(Outcome::Done)
 }
 
