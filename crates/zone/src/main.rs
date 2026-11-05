@@ -19,6 +19,7 @@ mod join;
 mod links;
 mod live;
 mod mcp;
+mod membership;
 mod profile;
 mod receipts;
 mod record;
@@ -90,6 +91,11 @@ enum Command {
         /// Ask the zone's admitter to admit this device, signed with the kit key (`--key-file`).
         #[arg(long)]
         kit: bool,
+        /// Publish a capability of this device once admitted, so `zone members` shows it at the
+        /// first look: `folder`, `inference` or `stream`, optionally `KIND:LABEL`. Repeat for
+        /// more. Offered to the members the zone has at that moment.
+        #[arg(long = "cap", value_name = "KIND[:LABEL]", value_parser = join::parse_cap)]
+        caps: Vec<join::Cap>,
         /// Return once joined (and, with `--kit`, asked) instead of waiting for admission.
         #[arg(long)]
         no_wait: bool,
@@ -101,7 +107,9 @@ enum Command {
         /// `agent.json`; published, sealed to the zone's members, once admitted.
         #[arg(long, value_name = "FILE", conflicts_with = "name")]
         manifest: Option<PathBuf>,
-        /// The name this seat advertises, with the CLI's own skill (`Zone notes and files`).
+        /// The name this seat goes by (1 to 64 bytes of text): the name it advertises, with the
+        /// CLI's own skill (`Zone notes and files`), and with `--kit` also the name the admitter
+        /// rosters it under, shown as the author of its notes. A `--manifest` name does the same.
         #[arg(long, value_name = "NAME")]
         name: Option<String>,
         /// With `--kit`: which of the kit's agents this seat is. Agents sharing one kit need
@@ -109,7 +117,10 @@ enum Command {
         #[arg(long, value_name = "ID", requires = "kit")]
         agent_id: Option<String>,
     },
-    /// Change the name this seat advertises, keeping its skills, and sync once to publish it.
+    /// Change this member's name in both places it lives: ask to be listed in the roster under
+    /// NAME (the zone's owner writes roster names, so for any other member the new name shows once
+    /// an owner device has synced; note authors follow it, old notes included), and change the
+    /// name this seat advertises, keeping its skills, with one sync to publish it.
     Rename {
         /// 1 to 64 bytes of printable text.
         name: String,
@@ -118,20 +129,31 @@ enum Command {
     /// last and next sync, last failure kind. Reads local state only.
     Status,
     /// Print the zone's members as JSON: pseudonym, name, kind (human, agent, ...), admin, devices
-    /// and the capabilities each offers, with whether each is online. Reads the roster this
-    /// device last synced, syncing once first when it is over a minute old; `--sync` always syncs.
+    /// and the capabilities each offers. Presence is coarse and only known for a member that
+    /// offers a capability: `online`, or `lastSeen` to the hour (UTC); `presence` is null for
+    /// one that offers none, which says nothing about whether it is around. The zone's owner also
+    /// sees `admittedBy`, the grant a member came in under. Reads the roster this device last
+    /// synced, syncing once first when it is over a minute old; `--sync` always syncs.
     Members {
         #[arg(long)]
         sync: bool,
     },
     /// Print the zone's admission grants as JSON: places, used and left, expiry, the kinds and
     /// scope each admits, whether revoked, and the per-agent caps (AORs, rooms, lines, admissions
-    /// per day; null when the owner set none). Reads the last synced roster,
+    /// per day; null when the owner set none). Grants that are full, expired or revoked are left
+    /// out (`hidden` counts them) unless `--all`. Reads the last synced roster,
     /// syncing once first when it is over a minute old; `--sync` always syncs.
     Grants {
         #[arg(long)]
         sync: bool,
+        /// Also list the grants that are full, expired or revoked.
+        #[arg(long)]
+        all: bool,
     },
+    /// Leave the joined zone: the owner removes this member and the zone is deleted from this
+    /// device. Receipts are kept first, in `<state>/receipts-<zone>.json`, and verify offline
+    /// with `zone receipts verify --file`. The zone's owner cannot leave.
+    Leave,
     /// Keep the joined zone synced until SIGINT or SIGTERM, and hold the live session: notes
     /// other members push arrive at once, and `zone note` goes through it.
     Run {
@@ -141,7 +163,9 @@ enum Command {
         #[command(flatten)]
         live: live::LiveArgs,
     },
-    /// Work with zone receipts.
+    /// Work with zone receipts. A direct note is acknowledged with a signed `delivered` receipt
+    /// from the recipient's device (members of a zone-wide note send none); `read` receipts are
+    /// sent only after `zone receipts read on`.
     Receipts {
         #[command(subcommand)]
         command: ReceiptsCommand,
@@ -157,6 +181,10 @@ enum Command {
         to: Vec<String>,
         /// The note's text, or `-` to read it from stdin.
         text: String,
+        /// Answer the note with this id (`id` in `zone notes`): the reply and its thread show in
+        /// `reply_to` and `thread`. A device from before replies cannot read a reply.
+        #[arg(long = "reply-to", value_name = "ID")]
+        reply_to: Option<String>,
     },
     /// Sync once and print the inbox's notes as JSON lines, oldest first: those addressed to
     /// this member or sent by it, and zone-wide ones only when subscribed (`zone subscribe`).
@@ -466,6 +494,12 @@ enum LinkCommand {
 enum ReceiptsCommand {
     /// The latest receipts this device opened, with their count (`/receipts`). Local only.
     List,
+    /// Send `read` receipts for direct notes you open with `zone notes`: `on` or `off`, or with
+    /// neither show the setting. Off until you turn it on.
+    Read {
+        #[arg(value_parser = ["on", "off"])]
+        setting: Option<String>,
+    },
     /// Verify the zone's signed action receipts and each actor's chain, offline. Exit 5 names the
     /// actor and seq of each receipt that is bad, dropped, repeated or out of order.
     Verify {
@@ -503,6 +537,7 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
             invite_file,
             core,
             kit: with_kit,
+            caps,
             no_wait,
             timeout,
             manifest,
@@ -514,6 +549,9 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
                 (None, Some(name)) => Some(profile::named(&name)?),
                 (None, None) => None,
             };
+            // A name given here (or by the manifest) is also what a kit join asks the admitter
+            // to roster this seat under; a default made later for a nameless seat is not.
+            let requested = profile.as_ref().map(|p| p.name.clone());
             let kit = match (with_kit, kit.as_ref()) {
                 (true, None) => return Err("join --kit needs the kit key: --key-file FILE".into()),
                 (true, Some(k)) => Some(k),
@@ -546,6 +584,8 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
                     code: &invite,
                     core: &core,
                     kit,
+                    name: requested.as_deref(),
+                    caps: &caps,
                     wait: !no_wait,
                     timeout: timeout.map(std::time::Duration::from_secs),
                     profile,
@@ -572,8 +612,18 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
             println!("{}", view::members(&state, sync)?);
             Ok(ExitCode::SUCCESS)
         }
-        Command::Grants { sync } => {
-            println!("{}", view::grants(&state, sync)?);
+        Command::Grants { sync, all } => {
+            println!("{}", view::grants(&state, sync, all)?);
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Leave => {
+            membership::leave(&state)?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Receipts {
+            command: ReceiptsCommand::Read { setting: on },
+        } => {
+            membership::read_receipts(&state, on.map(|s| s == "on"))?;
             Ok(ExitCode::SUCCESS)
         }
         Command::Run { rounds, live } => {
@@ -662,8 +712,8 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
             whoami(&state, kit.as_ref())?;
             Ok(ExitCode::SUCCESS)
         }
-        Command::Note { to, text } => {
-            items::note(&state, (text != "-").then_some(text), to)?;
+        Command::Note { to, text, reply_to } => {
+            items::note(&state, (text != "-").then_some(text), to, reply_to)?;
             Ok(ExitCode::SUCCESS)
         }
         Command::Notes { since, wait } => {
@@ -832,7 +882,9 @@ fn verify_receipts(input: &receipts::Input) -> ExitCode {
 }
 
 /// `zone status`: one JSON object. `state` is `admitted`, `pending` or `not-joined`; times are
-/// ms since the epoch, null when unknown; `lastFailure` is a kind, never Core's text.
+/// ms since the epoch, null when unknown; `lastSyncMs` is the last sync that went through and
+/// `lastLiveMs` the last message the live session applied between syncs; `lastFailure` is a
+/// kind, never Core's text.
 fn status(state: &std::path::Path) -> Result<(), String> {
     let (zone_id, pseudonym, membership, members) =
         match device::open_existing(state, Arc::new(device::Offline))? {
@@ -865,6 +917,7 @@ fn status(state: &std::path::Path) -> Result<(), String> {
             "state": membership,
             "members": members,
             "lastSyncMs": record.last_sync_ms,
+            "lastLiveMs": record.last_live_ms,
             "nextSyncMs": record.next_sync_ms,
             "lastFailure": record.last_failure,
         })
@@ -903,5 +956,109 @@ fn head_members(state: &std::path::Path, member: &[String]) -> Result<Vec<String
     match r.json["member"]["memberId"].as_str() {
         Some(id) if r.ok => Ok(vec![id.to_owned()]),
         _ => Err(format!("head: {}", r.text)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    fn parse(args: &[&str]) -> Result<Cli, clap::Error> {
+        Cli::try_parse_from(std::iter::once("zone").chain(args.iter().copied()))
+    }
+
+    #[test]
+    fn the_command_line_is_well_formed() {
+        Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn rename_leave_and_reply_parse() {
+        assert!(matches!(
+            parse(&["rename", "Aly Laptop"]).unwrap().command,
+            Command::Rename { name } if name == "Aly Laptop"
+        ));
+        assert!(matches!(parse(&["leave"]).unwrap().command, Command::Leave));
+        let note = parse(&["note", "--to", "bp:self:a", "--reply-to", "m1", "yes"]).unwrap();
+        match note.command {
+            Command::Note { to, text, reply_to } => {
+                assert_eq!((to, text), (vec!["bp:self:a".to_owned()], "yes".to_owned()));
+                assert_eq!(reply_to.as_deref(), Some("m1"));
+            }
+            _ => panic!("not a note"),
+        }
+    }
+
+    #[test]
+    fn grants_all_and_read_receipts_parse() {
+        assert!(matches!(
+            parse(&["grants"]).unwrap().command,
+            Command::Grants { all: false, .. }
+        ));
+        assert!(matches!(
+            parse(&["grants", "--all", "--sync"]).unwrap().command,
+            Command::Grants {
+                all: true,
+                sync: true
+            }
+        ));
+        assert!(matches!(
+            parse(&["receipts", "read", "on"]).unwrap().command,
+            Command::Receipts {
+                command: ReceiptsCommand::Read { setting: Some(s) }
+            } if s == "on"
+        ));
+        assert!(parse(&["receipts", "read", "maybe"]).is_err());
+    }
+
+    #[test]
+    fn join_takes_a_name_and_capabilities_only_in_their_forms() {
+        let join = parse(&[
+            "join",
+            "-",
+            "--kit",
+            "--name",
+            "Aly",
+            "--cap",
+            "inference",
+            "--cap",
+            "folder:Notes",
+        ])
+        .unwrap();
+        match join.command {
+            Command::Join {
+                name, caps, kit, ..
+            } => {
+                assert!(kit);
+                assert_eq!(name.as_deref(), Some("Aly"));
+                assert_eq!(caps.len(), 2);
+                assert_eq!(caps[1].label, "Notes");
+            }
+            _ => panic!("not a join"),
+        }
+        assert!(
+            parse(&["join", "-", "--name", "Aly"]).is_ok(),
+            "--name without --kit still names the advertised profile"
+        );
+        assert!(
+            parse(&["join", "-", "--name", "Aly", "--manifest", "a.json"]).is_err(),
+            "--name and --manifest both name the seat"
+        );
+        assert!(parse(&["join", "-", "--cap", "toaster"]).is_err());
+    }
+
+    #[test]
+    fn presence_is_off_unless_asked() {
+        let run = parse(&["run"]).unwrap();
+        match run.command {
+            Command::Run { live, .. } => assert!(!live.presence),
+            _ => panic!("not a run"),
+        }
+        let run = parse(&["run", "--presence"]).unwrap();
+        match run.command {
+            Command::Run { live, .. } => assert!(live.presence),
+            _ => panic!("not a run"),
+        }
     }
 }

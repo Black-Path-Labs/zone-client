@@ -3,7 +3,8 @@
 //! An invite link is redeemed by the SDK's join; the owner's device admits on its next sync. A
 //! zone code joins in person: the owner adds the join code this prints (Add a device). With
 //! `--kit` the device also asks the zone's admitter with a join request the kit key signs (SDK
-//! `request_admission`), so admission needs no human step. A request lives
+//! `request_admission`), so admission needs no human step; `--name` asks to be rostered under
+//! that name rather than the admitter's default. A request lives
 //! `MAX_REQUEST_AGE_MS`; while waiting, a new one goes out when the last has expired, and after
 //! a failed send (no grant in force yet: 404) the waiting backoff decides when.
 //!
@@ -24,7 +25,12 @@
 //!
 //! The name and skills to advertise (`--manifest`, `--name`, else a saved `agent.json`, else a
 //! default from the kit agent id or roster name) go to the SDK right after the join and before
-//! the wait; the SDK publishes them on the first admitted sync (profile.rs).
+//! the wait; the SDK publishes them on the first admitted sync (profile.rs). A name given by
+//! `--name` or the manifest is also the one a kit join asks the admitter to roster the seat under.
+//!
+//! `--cap KIND[:LABEL]` (repeatable) publishes a capability of this device once it is admitted, so
+//! it shows in `zone members` from the first look instead of after a separate step. It is offered
+//! to the zone's members as they stand at that moment (Core wants a named list, not "everyone").
 //!
 //! Every step is an SDK call. Running `zone join` again with the same code resumes the wait: it
 //! syncs first, so a device admitted meanwhile is done without asking again. Each sync is noted
@@ -67,11 +73,44 @@ pub enum Outcome {
     TimedOut,
 }
 
+/// A capability to publish at join: `KIND` or `KIND:LABEL`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Cap {
+    pub kind: String,
+    pub label: String,
+}
+
+/// The capability kinds a device may publish.
+pub const CAP_KINDS: [&str; 3] = ["folder", "inference", "stream"];
+
+/// `--cap`'s value parser.
+pub fn parse_cap(arg: &str) -> Result<Cap, String> {
+    let (kind, label) = arg.split_once(':').unwrap_or((arg, arg));
+    let (kind, label) = (kind.trim(), label.trim());
+    if !CAP_KINDS.contains(&kind) {
+        return Err(format!(
+            "unknown capability kind {kind:?}; one of {}",
+            CAP_KINDS.join(", ")
+        ));
+    }
+    if label.is_empty() || label.len() > 120 || label.chars().any(char::is_control) {
+        return Err("a capability label is 1 to 120 bytes of text".into());
+    }
+    Ok(Cap {
+        kind: kind.to_owned(),
+        label: label.to_owned(),
+    })
+}
+
 pub struct Options<'a> {
     pub code: &'a str,
     /// The Core a join address is resolved at.
     pub core: &'a str,
     pub kit: Option<&'a KitKey>,
+    /// With `kit`: the name the admitter is asked to roster this member under.
+    pub name: Option<&'a str>,
+    /// Capabilities to publish once admitted.
+    pub caps: &'a [Cap],
     pub wait: bool,
     pub timeout: Option<Duration>,
     /// The name and skills to advertise; None keeps a saved `agent.json`, if any.
@@ -196,7 +235,7 @@ pub fn run(state: &Path, opts: Options<'_>) -> Result<Outcome, String> {
                 );
             }
         }
-        return admitted(&device, &zone_id);
+        return admitted(&device, &zone_id, opts.caps);
     }
     // A resumed wait: the admitter may have let this device in since. Look before asking again,
     // or the admitter refuses the new request as from a member.
@@ -205,7 +244,7 @@ pub fn run(state: &Path, opts: Options<'_>) -> Result<Outcome, String> {
         record.synced(synced.as_ref().map(|_| ()));
         record.save(state)?;
         if synced.is_ok() && device.status().admitted {
-            return admitted(&device, &zone_id);
+            return admitted(&device, &zone_id, opts.caps);
         }
     }
     if in_person && opts.kit.is_none() {
@@ -226,7 +265,11 @@ pub fn run(state: &Path, opts: Options<'_>) -> Result<Outcome, String> {
     loop {
         if let (Some(kit), Some(due)) = (opts.kit, request_due) {
             if Instant::now() >= due {
-                match device.request_admission(kit.seed(), KIND) {
+                let asked_now = match opts.name {
+                    Some(name) => device.request_admission_named(kit.seed(), KIND, name),
+                    None => device.request_admission(kit.seed(), KIND),
+                };
+                match asked_now {
                     Ok(()) => {
                         request_backoff.succeeded();
                         asked = Some(Instant::now());
@@ -265,7 +308,7 @@ pub fn run(state: &Path, opts: Options<'_>) -> Result<Outcome, String> {
         let was_read_at_once = read_at_once;
         read_at_once = synced.is_ok() && !held;
         let wait = match &synced {
-            Ok(_) if device.status().admitted => return admitted(&device, &zone_id),
+            Ok(_) if device.status().admitted => return admitted(&device, &zone_id, opts.caps),
             // Core held the read and nothing came for this device: look again at once. A read
             // that was not held moved the cursor past what was there (a member at Core whose
             // roster is not posted yet), so the next one is held: also at once, but only once.
@@ -291,7 +334,7 @@ pub fn run(state: &Path, opts: Options<'_>) -> Result<Outcome, String> {
                 record.synced(synced.as_ref().map(|_| ()));
                 record.save(state)?;
                 return match synced {
-                    Ok(_) if device.status().admitted => admitted(&device, &zone_id),
+                    Ok(_) if device.status().admitted => admitted(&device, &zone_id, opts.caps),
                     _ => Ok(Outcome::TimedOut),
                 };
             }
@@ -302,7 +345,7 @@ pub fn run(state: &Path, opts: Options<'_>) -> Result<Outcome, String> {
     }
 }
 
-fn admitted(device: &ZoneDevice, zone_id: &str) -> Result<Outcome, String> {
+fn admitted(device: &ZoneDevice, zone_id: &str, caps: &[Cap]) -> Result<Outcome, String> {
     let me = device
         .members()
         .into_iter()
@@ -315,6 +358,7 @@ fn admitted(device: &ZoneDevice, zone_id: &str) -> Result<Outcome, String> {
             .ok_or("admitted, but the roster does not list this device yet")?,
     };
     println!("joined {zone_id} as {pseudonym}");
+    publish_caps(device, caps)?;
     // The zone rep's first question, once per zone. It starts only now, after the joined state,
     // and makes no request; the answers stay on this device until a yes.
     if let Ok(step) = device.onboard_start(false) {
@@ -325,9 +369,52 @@ fn admitted(device: &ZoneDevice, zone_id: &str) -> Result<Outcome, String> {
     Ok(Outcome::Done)
 }
 
+/// Publish each capability to the zone's members as they are now. The first failure ends the
+/// join with an error naming the kind (never Core's text); those before it stay published.
+fn publish_caps(device: &ZoneDevice, caps: &[Cap]) -> Result<(), String> {
+    if caps.is_empty() {
+        return Ok(());
+    }
+    let principals: Vec<String> = device.members().into_iter().map(|m| m.member_id).collect();
+    for cap in caps {
+        let id = device
+            .publish_capability(&cap.kind, &principals, &cap.label)
+            .map_err(|e| {
+                format!(
+                    "joined, but the {} capability was not published ({})",
+                    cap.kind,
+                    kind(&e)
+                )
+            })?;
+        eprintln!("zone join: published {} capability {id}", cap.kind);
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_cap_is_a_kind_with_an_optional_label() {
+        assert_eq!(
+            parse_cap("inference").unwrap(),
+            Cap {
+                kind: "inference".into(),
+                label: "inference".into()
+            }
+        );
+        assert_eq!(
+            parse_cap("folder: Field notes ").unwrap(),
+            Cap {
+                kind: "folder".into(),
+                label: "Field notes".into()
+            }
+        );
+        assert!(parse_cap("toaster").is_err());
+        assert!(parse_cap("folder:").is_err());
+        assert!(parse_cap("folder:a\nb").is_err());
+    }
 
     #[test]
     fn only_not_yet_unreachable_5xx_and_429_are_retried() {

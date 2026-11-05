@@ -43,7 +43,7 @@ pub fn joined(state: &Path, cmd: &str) -> Result<Arc<ZoneDevice>, String> {
 
 /// One sync that does not wait, recorded for `zone status` and the roster reads. A failure
 /// prints its kind, never Core's text.
-fn sync_once(state: &Path, device: &ZoneDevice, cmd: &str) {
+pub(crate) fn sync_once(state: &Path, device: &ZoneDevice, cmd: &str) {
     let synced = device.sync(0);
     let mut record = SyncRecord::load(state);
     record.synced(synced.as_ref().map(|_| ()));
@@ -128,7 +128,15 @@ pub fn item_line(i: &Item) -> Value {
         "to": if i.to.is_empty() { json!("zone") } else { json!(i.to) },
     });
     match i.kind {
-        ItemKind::Note => v["text"] = json!(i.text),
+        ItemKind::Note => {
+            v["text"] = json!(i.text);
+            // A reply names the note it answers and the first note of its thread; a note that
+            // answers nothing carries neither.
+            if let Some(re) = &i.reply_to {
+                v["reply_to"] = json!(re);
+                v["thread"] = json!(i.thread);
+            }
+        }
         ItemKind::File => {
             v["file"] = json!(i.text);
             v["mime"] = json!(i.mime);
@@ -148,9 +156,15 @@ pub fn select(items: Vec<Item>, kind: ItemKind, since: Option<i64>) -> Vec<Item>
 }
 
 /// `zone note`: `text` is the argument, or None to read stdin; `to` the recipients, or none for
-/// the whole zone.
-pub fn note(state: &Path, text: Option<String>, to: Vec<String>) -> Result<(), String> {
+/// the whole zone; `reply_to` the id of the note this one answers (from `zone notes`).
+pub fn note(
+    state: &Path,
+    text: Option<String>,
+    to: Vec<String>,
+    reply_to: Option<String>,
+) -> Result<(), String> {
     let to = recipients("note", to)?;
+    let reply_to = reply_to.map(|id| reply_id(&id)).transpose()?;
     let raw = match text {
         Some(t) => t.into_bytes(),
         None => {
@@ -169,19 +183,38 @@ pub fn note(state: &Path, text: Option<String>, to: Vec<String>) -> Result<(), S
         _ => return crate::slash::run(state, &text),
     };
     // A running `zone run` seals and pushes it over its live session, with no sync first.
-    if let Some(item) = crate::live::send_note(state, &text, &to)? {
+    if let Some(item) = crate::live::send_note(state, &text, &to, reply_to.as_deref())? {
         println!("{item}");
         return Ok(());
     }
     let device = joined(state, "note")?;
-    let item = if to.is_empty() {
-        device.add_note(text)
-    } else {
-        device.add_note_to(to, text)
+    let item = match reply_to {
+        Some(re) => device.add_note_reply(to, text, re),
+        None if to.is_empty() => device.add_note(text),
+        None => device.add_note_to(to, text),
     }
-    .map_err(|e| sdk_error("note", &e))?;
+    .map_err(|e| match e {
+        ZoneError::NotFound => {
+            "note: --reply-to names no note this device holds; see `zone notes`".to_owned()
+        }
+        e => sdk_error("note", &e),
+    })?;
     println!("{}", item_line(&item));
     Ok(())
+}
+
+/// A note id for `--reply-to`: 1 to 64 of letters, digits, `-` and `_`, as the SDK writes them.
+pub fn reply_id(id: &str) -> Result<String, String> {
+    let id = id.trim();
+    if (1..=64).contains(&id.len())
+        && id
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_')
+    {
+        Ok(id.to_owned())
+    } else {
+        Err("note: --reply-to is not a note id (see `id` in `zone notes`)".into())
+    }
 }
 
 /// `zone notes` and `zone files`: the inbox's items of one kind. With `wait`, print what arrives
@@ -221,15 +254,48 @@ pub fn list(
             }
         }
     }
+    if kind == ItemKind::Note {
+        // Receipts go only for the notes this listing shows (after since, quiet and wait).
+        acknowledge(
+            &device,
+            true,
+            Some(items.iter().map(|i| i.id.clone()).collect()),
+        );
+    }
     let mut out = std::io::stdout().lock();
     for i in items {
         let mut line = item_line(&i);
         if i.kind == ItemKind::File && i.mine {
             line["receipts"] = receipts_line(&device, &i.id);
         }
+        if i.kind == ItemKind::Note && i.mine && !i.to.is_empty() {
+            line["receipts"] = note_receipts_line(&device, &i.id);
+        }
         writeln!(out, "{line}").map_err(|e| e.to_string())?;
     }
     Ok(())
+}
+
+/// Send the receipts due for direct and group notes: `delivered` always, `read` too when `read`
+/// is set and this person turned read receipts on (`zone receipts read on`). A failure is a
+/// warning, never the command's: the next sync tries again, and each receipt goes once. With
+/// `only`, just those note ids are acknowledged.
+pub fn acknowledge(device: &ZoneDevice, read: bool, only: Option<Vec<String>>) {
+    if let Err(e) = device.acknowledge_notes(read, only) {
+        if !matches!(e, ZoneError::NotAdmitted) {
+            eprintln!("zone: note receipts not sent ({})", join::kind(&e));
+        }
+    }
+}
+
+/// The signed receipts this device got for a note it sent to members: a delivered and maybe a
+/// read one per receiving member.
+fn note_receipts_line(device: &ZoneDevice, id: &str) -> Value {
+    device
+        .note_receipts(id.to_owned())
+        .iter()
+        .map(|r| json!({"member": r.member, "kind": r.kind, "at": r.at}))
+        .collect()
 }
 
 /// The signed receipts this device got for a file it sent: one per receiving member.
@@ -499,6 +565,8 @@ mod tests {
             mine: false,
             complete: true,
             to: vec![],
+            reply_to: None,
+            thread: None,
         }
     }
 
@@ -529,6 +597,26 @@ mod tests {
                    "mine": false, "to": "zone", "file": "hello", "mime": "text/plain", "size": 5,
                    "complete": false})
         );
+    }
+
+    #[test]
+    fn a_reply_line_names_its_parent_and_thread_and_a_plain_note_neither() {
+        let mut reply = item(ItemKind::Note, 9);
+        reply.reply_to = Some("m-2".into());
+        reply.thread = Some("m-1".into());
+        let v = item_line(&reply);
+        assert_eq!(v["reply_to"], json!("m-2"));
+        assert_eq!(v["thread"], json!("m-1"));
+        let plain = item_line(&item(ItemKind::Note, 9));
+        assert!(plain.get("reply_to").is_none() && plain.get("thread").is_none());
+    }
+
+    #[test]
+    fn a_reply_id_is_checked_before_any_network_call() {
+        assert_eq!(reply_id(" 0198f2c0-aaaa_B \n").unwrap(), "0198f2c0-aaaa_B");
+        for bad in ["", "   ", "a b", "x/y", &"a".repeat(65)] {
+            assert!(reply_id(bad).is_err(), "{bad:?}");
+        }
     }
 
     #[test]
