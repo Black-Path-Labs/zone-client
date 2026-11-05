@@ -29,5 +29,10 @@ ureq = { version = "2", default-features = false, features = ["tls"] }
 url = "2"
 zeroize = "1"
 
+# `zone fs mount`: no default features, so fuser mounts through the fusermount3 helper and needs
+# no libfuse headers to build.
+[target.'cfg(target_os = "linux")'.dependencies]
+fuser = { version = "0.18", default-features = false }
+
 [dev-dependencies]
 tempfile = "3"

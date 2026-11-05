@@ -941,7 +941,11 @@ mod tests {
     fn every_command_is_a_local_tool_and_back() {
         let tools = slash_tools();
         assert_eq!(tools.len(), commands::COMMANDS.len());
-        assert_eq!(local_tools().len(), commands::COMMANDS.len() + 4, "and the zone fs tools");
+        assert_eq!(
+            local_tools().len(),
+            commands::COMMANDS.len() + 4,
+            "and the zone fs tools"
+        );
         assert_eq!(tools[1]["inputSchema"]["required"], json!(["member"]));
         let line = |name: &str, args: Value| local_line(&json!({"name": name, "arguments": args}));
         assert_eq!(line("zone_who", json!({})).as_deref(), Some("/who"));

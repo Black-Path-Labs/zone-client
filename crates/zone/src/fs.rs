@@ -167,6 +167,13 @@ enum Op {
         #[arg(long, short = 'i')]
         ignore_case: bool,
     },
+    /// Mount an export read-only at DIR until interrupted (Linux, with FUSE).
+    Mount {
+        dir: PathBuf,
+        /// The remote path to mount (default: the list of exports).
+        #[arg(default_value = "")]
+        root: String,
+    },
     /// Time ls, cat and grep over one session (20 runs each by default), as JSON.
     #[command(hide = true)]
     Bench {
@@ -295,12 +302,15 @@ fn server(state: &Path, device: &Arc<ZoneDevice>) -> Result<Server, String> {
     let grants =
         GrantStore::open(&dir.join("grants"), &signer.member()).map_err(|e| refusal(&e))?;
     let zone = device.status().zone_id.unwrap_or_default();
+    let shares = bp_zone_fs::share::ShareStore::open(&dir.join("shares"), &signer.member())
+        .map_err(|e| refusal(&e))?;
     let srv = Server::new(
         &zone,
         signer,
         grants,
         ReceiptLog::file(dir.join("receipts.jsonl")),
-    );
+    )
+    .with_shares(shares);
     for cfg in load_exports(state)? {
         let label = cfg.label.clone();
         if let Err(e) = srv.add_export(cfg) {
@@ -491,7 +501,8 @@ pub fn command(state: &Path, command: FsCommand) -> Result<(), String> {
         FsCommand::Ls { sip, json: as_json } => list_exporters(state, &sip, as_json),
         FsCommand::Target(args) => {
             let cli =
-                <TargetCli as clap::Parser>::try_parse_from(args).map_err(|e| e.to_string())?;
+                // Help and usage errors print and exit as clap's own do.
+                <TargetCli as clap::Parser>::try_parse_from(args).unwrap_or_else(|e| e.exit());
             target(state, cli)
         }
     }
@@ -643,6 +654,10 @@ fn entry_line(e: &bp_zone_fs::policy::Entry) -> String {
 }
 
 fn target(state: &Path, cli: TargetCli) -> Result<(), String> {
+    if matches!(cli.op, Op::Mount { .. }) {
+        // Before any network activity.
+        crate::fsmount::available().map_err(|e| format!("zone fs mount: {e}"))?;
+    }
     let device = items::joined(state, "fs")?;
     let member = resolve_member(&device, &cli.agent).map_err(|e| refusal(&e))?;
     run::catch_signals();
@@ -654,7 +669,10 @@ fn target(state: &Path, cli: TargetCli) -> Result<(), String> {
             json!({"session_open_ms": t.elapsed().as_secs_f64() * 1e3})
         );
     }
-    let result = op(&client, cli.op);
+    let result = match cli.op {
+        Op::Mount { dir, root } => crate::fsmount::mount(Arc::new(client), &root, &dir),
+        other => op(&client, other),
+    };
     close(&session);
     result
 }
@@ -790,6 +808,7 @@ fn op(client: &FsClient, op: Op) -> Result<(), String> {
             grep_path,
             runs,
         } => bench(client, &ls, &cat, &grep, &grep_path, runs),
+        Op::Mount { .. } => Err("zone fs mount: handled by the caller".into()),
     }
 }
 
@@ -864,6 +883,112 @@ fn bench(
         })
     );
     Ok(())
+}
+
+// ── Shares ──────────────────────────────────────────────────────────────────────────────────
+
+/// `zone share` subcommands; `zone share NAME PATH` publishes or updates one.
+#[derive(clap::Subcommand)]
+pub enum ShareCommand {
+    /// Your live shares.
+    List,
+    /// Withdraw a share: a signed tombstone, announced to the members who could see it.
+    Remove { name: String },
+    #[command(external_subcommand)]
+    Publish(Vec<String>),
+}
+
+#[derive(clap::Parser)]
+#[command(name = "zone share", no_binary_name = true)]
+struct ShareCli {
+    /// The alias readers use (`snippets/turn-retry`).
+    name: String,
+    /// A file or directory inside one of your exports (a local path, or `LABEL/PATH`).
+    path: String,
+    /// Only these members (repeatable; a name or pseudonym). Default: every member.
+    #[arg(long = "to", value_name = "MEMBER")]
+    to: Vec<String>,
+}
+
+/// Tell the members a share change is for, with a sealed note only they can open (the zone event
+/// stream will carry the same signed event once it exists).
+fn announce(device: &ZoneDevice, p: &bp_zone_fs::share::Published) {
+    let Some(event) = &p.event else { return };
+    let roster: Vec<Actor> = device
+        .members()
+        .into_iter()
+        .filter(|m| !m.is_me)
+        .map(|m| Actor::member(&m.member_id))
+        .collect();
+    let text = bp_zone_fs::share_event::note_text(event);
+    let sent = match bp_zone_fs::share_event::audience(&p.share.visibility, &roster) {
+        None => device.add_note(text).map(|_| ()),
+        Some(to) if to.is_empty() => Ok(()),
+        Some(to) => to
+            .chunks(items::MAX_RECIPIENTS)
+            .try_for_each(|c| device.add_note_to(c.to_vec(), text.clone()).map(|_| ())),
+    };
+    if let Err(e) = sent {
+        eprintln!("{}", items::sdk_error("share: announcing", &e));
+    }
+}
+
+pub fn share_command(state: &Path, command: ShareCommand) -> Result<(), String> {
+    let device = items::joined(state, "share")?;
+    let srv = server(state, &device)?;
+    match command {
+        ShareCommand::List => {
+            for (_, s) in srv.shares.live(srv.signer()) {
+                println!(
+                    "{}",
+                    json!({"name": s.name, "version": s.version, "target": s.target, "visibility": s.visibility.to_json(), "digest": s.digest})
+                );
+            }
+            Ok(())
+        }
+        ShareCommand::Remove { name } => {
+            let p = srv.unshare(&name).map_err(|e| refusal(&e))?;
+            announce(&device, &p);
+            println!(
+                "{}",
+                json!({"name": p.share.name, "version": p.share.version, "removed": true})
+            );
+            Ok(())
+        }
+        ShareCommand::Publish(args) => {
+            let cli = <ShareCli as clap::Parser>::try_parse_from(args).unwrap_or_else(|e| e.exit());
+            let path = match srv.export_path(Path::new(&cli.path)) {
+                Some(p) => p,
+                None if !Path::new(&cli.path).exists() => cli.path.clone(),
+                None => {
+                    return Err(format!(
+                        "zone share: {} is not inside one of your exports",
+                        cli.path
+                    ))
+                }
+            };
+            let visibility = if cli.to.is_empty() {
+                Subject::Zone
+            } else {
+                Subject::Members(
+                    cli.to
+                        .iter()
+                        .map(|m| resolve_member(&device, m))
+                        .collect::<Result<_, _>>()
+                        .map_err(|e| refusal(&e))?,
+                )
+            };
+            let p = srv
+                .share(&cli.name, &path, visibility)
+                .map_err(|e| refusal(&e))?;
+            announce(&device, &p);
+            println!(
+                "{}",
+                json!({"name": p.share.name, "version": p.share.version, "target": p.share.target, "digest": p.share.digest})
+            );
+            Ok(())
+        }
+    }
 }
 
 // ── MCP ─────────────────────────────────────────────────────────────────────────────────────
