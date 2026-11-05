@@ -22,6 +22,7 @@ mod room;
 mod run;
 mod secret;
 mod slash;
+mod srv;
 mod state;
 mod stream;
 mod transport;
