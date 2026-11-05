@@ -246,10 +246,10 @@ enum Op {
         /// The patch file (`git diff` output), or `-` for stdin.
         file: PathBuf,
         /// The full commit id the patch is against.
-        #[arg(long)]
+        #[arg(long, short = 'b')]
         base: String,
         /// A check you ran, `NAME=pass|fail|skip` (repeatable). Recorded, never trusted.
-        #[arg(long = "check", value_name = "NAME=RESULT")]
+        #[arg(long = "check", short = 'c', value_name = "NAME=RESULT")]
         checks: Vec<String>,
         /// The PR carrying the same change, if any (plain https URL).
         #[arg(long)]
@@ -850,7 +850,15 @@ fn target(state: &Path, cli: TargetCli) -> Result<(), String> {
             base,
             checks,
             pr,
-        } => submit_patch(&device, &client, &label, &file, base, &checks, pr),
+        } => submit_patch(
+            &device,
+            &client,
+            label.trim_end_matches('/'),
+            &file,
+            base,
+            &checks,
+            pr,
+        ),
         Op::Ask {
             label,
             question,
@@ -859,7 +867,7 @@ fn target(state: &Path, cli: TargetCli) -> Result<(), String> {
             &device,
             &client,
             &member,
-            &label,
+            label.trim_end_matches('/'),
             &question,
             base.as_deref(),
         ),
