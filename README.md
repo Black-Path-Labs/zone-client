@@ -414,6 +414,7 @@ zone fs <agent> grep -t rust 'fn main' core/
 zone fs <agent> find mod.rs core/
 zone fs <agent> symbols verify_jwt core/
 zone fs <agent> mount ~/mnt/core core/                    # read-only, until Ctrl+C
+zone fs <agent> semantic 'backoff jitter' core/
 ```
 
 A member exports a directory under a label and grants other members access to path prefixes of
@@ -435,6 +436,9 @@ exporting device that names who asked, in `fs/receipts.jsonl` in its state dir, 
 file contents, patterns or host paths. `zone fs revoke GRANT_ID` stops a grant at its next frame;
 `zone fs unexport LABEL` revokes all of an export's grants. `zone fs grants` and `zone fs exports`
 list yours. `zone fs serve --republish` publishes the server again, naming members admitted since.
+`semantic` asks the exporting machine for the windows nearest a query by a pinned local embedding
+model; `zone fs serve` ships no model yet, so it answers that semantic search is off until an
+owner runs a server built with one.
 
 ```sh
 zone share snippets/turn-retry ~/src/myapp/src/turn.rs
@@ -449,6 +453,28 @@ and budgets. Changing what it points at or what the target holds makes a new ver
 leaves a signed tombstone. The members it is for get each change as a signed event in a note only
 they can open. `zone fs serve` checks shared files on every read, so one made owner-only or
 ignored after publishing stops being readable at once.
+
+```sh
+zone fs grant <pseudonym> core --ops metadata,read,grep,find,patch
+zone fs <agent> patch core/ fix.diff -b <commit> -c 'cargo-test=pass'
+zone fs <agent> ask core/ - < question.txt
+zone fs inbox list
+zone fs inbox show PATCH_ID --diff
+zone fs inbox review PATCH_ID --check 'test=cargo test'
+zone fs inbox accept PATCH_ID
+zone fs inbox reject PATCH_ID --reason checks-failed
+```
+
+Coding work on someone else's export comes back as a patch, never as a write. The owner grants
+`patch` alongside the read operations. `zone fs <agent> patch` signs the patch with your device and
+sends it on the zone fs session under a live grant that names `patch`. The owner's machine checks
+the signature, that the grant is yours and live, that every path the patch touches is inside the
+grant and off the deny-list, then files it in its inbox; nothing is applied. The owner reviews it
+in a fresh git worktree at its base with its own checks (the checks you claim are recorded, never
+trusted), and only an explicit `accept` after checks that all passed signs an accepted-patch
+receipt with a payment reference, once per patch. Accept and reject each send the author the signed
+receipt in a note. `zone fs <agent> ask` sends the owner a question about the export as a note to
+that member alone.
 
 Errors start with a stable code: `fs-agent-not-found`, `fs-agent-ambiguous`,
 `fs-export-not-found` (also what a member without a grant sees), `fs-denied` (missing, hidden or
