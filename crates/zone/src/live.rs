@@ -11,10 +11,13 @@
 //! then posts it to Core. No sync and no challenge stand before the push. Without a running
 //! `zone run`, `zone note` posts over HTTP as before.
 //!
-//! Presence: once registered, the session PUBLISHes this device's signed presence tuple to the
-//! zone's AOR and SUBSCRIBEs to the zone's presence, both refreshed with the registration. Each NOTIFY replaces the SDK's view, which
-//! `zone who` reads through `live.sock` (`{"cmd": LINE}`); the view is cleared when the session
-//! drops.
+//! Presence is opt-in (`zone run --presence`). Without it the session neither announces this
+//! device nor watches the others: nobody learns from this client that its owner is at the
+//! keyboard, and `zone who` shows only what it is allowed to know (nothing). With it, once
+//! registered, the session PUBLISHes this device's signed presence tuple to the zone's AOR and
+//! SUBSCRIBEs to the zone's presence, both refreshed with the registration. Each NOTIFY replaces
+//! the SDK's view, which `zone who` reads through `live.sock` (`{"cmd": LINE}`); the view is
+//! cleared when the session drops.
 //!
 //! The edge sees the zone's address, sealed bytes, sizes and timing; nothing here logs a body.
 
@@ -86,6 +89,10 @@ pub struct LiveArgs {
     /// No live session, even with `--sip-ws` or `ZONE_SIP_WS` set.
     #[arg(long)]
     pub no_live: bool,
+    /// Announce this device as online to the zone's members, and see theirs (`zone who`). Off by
+    /// default: a live session alone says nothing about who is here.
+    #[arg(long, env = "ZONE_PRESENCE")]
+    pub presence: bool,
 }
 
 /// The edge's WebSocket URL, SIP domain and Origin, from the flags and the zone service's URL.
@@ -132,17 +139,20 @@ pub struct Live {
     catch_up: AtomicBool,
     /// The session's thread has returned (after its clean stop).
     ended: AtomicBool,
+    /// The state dir, where a pushed message is noted for `zone status` (record.rs).
+    state: PathBuf,
 }
 
 impl Live {
     /// Start the session's thread for `device`. It reconnects until the run stops.
-    pub fn start(device: Arc<ZoneDevice>, args: LiveArgs) -> Arc<Live> {
+    pub fn start(device: Arc<ZoneDevice>, args: LiveArgs, state: PathBuf) -> Arc<Live> {
         let (tx, rx) = mpsc::channel();
         let live = Arc::new(Live {
             up: AtomicBool::new(false),
             out: Mutex::new(tx),
             catch_up: AtomicBool::new(false),
             ended: AtomicBool::new(false),
+            state,
         });
         let l = Arc::clone(&live);
         std::thread::spawn(move || {
@@ -293,7 +303,10 @@ fn serve(
     live.up.store(true, Ordering::SeqCst);
     live.catch_up.store(true, Ordering::SeqCst);
     trace("live: registered");
-    let mut presence = Presence::default();
+    let mut presence = Presence {
+        on: args.presence,
+        ..Presence::default()
+    };
     presence.publish(device, &mut ws, &leg, &aor, &edge.domain)?;
     presence.subscribe(&mut ws, &leg, &aor)?;
     let mut refresh = Instant::now() + REFRESH;
@@ -386,6 +399,10 @@ fn take(device: &ZoneDevice, live: &Live, ws: &mut Socket, m: &Message) -> Resul
             if s.roster_changed || s.admitted_now {
                 live.catch_up.store(true, Ordering::SeqCst);
             }
+            // Applied without a sync: noted apart from `lastSyncMs`, which it does not move.
+            if let Err(e) = crate::record::SyncRecord::live_applied(&live.state) {
+                trace(&format!("live: not noted ({e})"));
+            }
         }
         Ok(None) => {}
         Err(e) => trace(&format!("live: not applied ({})", crate::join::kind(&e))),
@@ -396,6 +413,8 @@ fn take(device: &ZoneDevice, live: &Live, ws: &mut Socket, m: &Message) -> Resul
 /// This session's presence publication and subscription.
 #[derive(Default)]
 struct Presence {
+    /// Opted in (`--presence`); off, every method here does nothing.
+    on: bool,
     /// The edge's `SIP-ETag` for the publication, once it took one.
     etag: Option<String>,
     publish_call_id: String,
@@ -412,6 +431,9 @@ impl Presence {
         aor: &str,
         domain: &str,
     ) -> Result<(), String> {
+        if !self.on {
+            return Ok(());
+        }
         let body = match device.presence_body(domain.to_owned()) {
             Ok(b) => b,
             Err(e) => {
@@ -426,6 +448,9 @@ impl Presence {
 
     /// A new subscription; the one before lapses on its own.
     fn subscribe(&mut self, ws: &mut Socket, leg: &LiveLeg, aor: &str) -> Result<(), String> {
+        if !self.on {
+            return Ok(());
+        }
         let (raw, call_id) = leg.subscribe(aor, EXPIRES);
         self.subscribe_call_id = call_id;
         send(ws, raw)
@@ -467,6 +492,9 @@ impl Presence {
         aor: &str,
         domain: &str,
     ) {
+        if !self.on {
+            return;
+        }
         if let (Some(etag), Ok(body)) = (&self.etag, device.presence_closed_body(domain.to_owned()))
         {
             let _ = send(ws, leg.publish(aor, &body, WITHDRAW_EXPIRES, Some(etag)).0);
@@ -542,7 +570,11 @@ fn answer_note(conn: UnixStream, device: &ZoneDevice, live: &Live) -> std::io::R
                 .flatten()
                 .filter_map(|v| v.as_str().map(str::to_owned))
                 .collect();
-            match device.add_note_live(to, text) {
+            let sent = match req["re"].as_str() {
+                Some(re) => device.add_note_live_reply(to, text, re.to_owned()),
+                None => device.add_note_live(to, text),
+            };
+            match sent {
                 Ok(n) => {
                     let pushed = live.push(&n.body);
                     let pushed_ms = start.elapsed().as_millis() as u64;
@@ -585,13 +617,19 @@ fn post(device: &ZoneDevice, body: &str) -> Result<(), String> {
 
 #[cfg(unix)]
 /// `zone note` through a running `zone run`: the item line, or None when no run answers.
-pub fn send_note(state: &Path, text: &str, to: &[String]) -> Result<Option<Value>, String> {
+pub fn send_note(
+    state: &Path,
+    text: &str,
+    to: &[String],
+    reply_to: Option<&str>,
+) -> Result<Option<Value>, String> {
     let Ok(mut conn) = UnixStream::connect(socket_path(state)) else {
         return Ok(None);
     };
     let _ = conn.set_read_timeout(Some(NOTE_WAIT));
     let started = Instant::now();
-    writeln!(conn, "{}", json!({"note": text, "to": to})).map_err(|e| format!("note: {e}"))?;
+    writeln!(conn, "{}", json!({"note": text, "to": to, "re": reply_to}))
+        .map_err(|e| format!("note: {e}"))?;
     let mut line = String::new();
     BufReader::new(&conn)
         .read_line(&mut line)
@@ -649,6 +687,11 @@ pub fn listen(state: &Path, _: Arc<ZoneDevice>, _: Arc<Live>) -> Result<NoteSock
 }
 
 #[cfg(not(unix))]
-pub fn send_note(_: &Path, _: &str, _: &[String]) -> Result<Option<Value>, String> {
+pub fn send_note(
+    _: &Path,
+    _: &str,
+    _: &[String],
+    _: Option<&str>,
+) -> Result<Option<Value>, String> {
     Ok(None)
 }

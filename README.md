@@ -237,9 +237,35 @@ roster); `--sync` always syncs and fails when Core does not answer. `syncedAtMs`
 roster was last synced.
 
 ```sh
-zone members   # {"zoneId","admitted","syncedAtMs","members":[{"memberId","name","kind","admin","me","devices","capabilities":[{"capId","kind","label","machine","online"}]}]}
-zone grants    # {"zoneId","syncedAtMs","grants":[{"grantId","admitter","kinds","scope","places","used","left","issuedAtMs","expiresAtMs","revoked","inForce"}],"agentCaps":{"aors","rooms","lines","admissionsPerDay"}}
+zone members   # {"zoneId","admitted","syncedAtMs","members":[{"memberId","name","kind","admin","me","devices","capabilities":[{"capId","kind","label","machine","online"}],"presence","admittedBy"}]}
+zone grants    # {"zoneId","syncedAtMs","grants":[{"grantId","admitter","kinds","scope","places","used","left","issuedAtMs","expiresAtMs","revoked","inForce"}],"hidden","agentCaps":{"aors","rooms","lines","admissionsPerDay"}}
+zone grants --all   # also the grants that are full, expired or revoked
 ```
+
+`zone grants` leaves out the grants that are full, expired or revoked (`hidden` counts them);
+`--all` lists them. `admittedBy` in `zone members` names the grant a member came in under and is
+there only when this device's person owns the zone: no other member learns whose invitation a
+given member used.
+
+**Presence is coarse and opt-in.** A capability Core lists as registered shows `online: true`;
+one that is not shows `lastSeen` rounded down to the hour (UTC), never finer. A member's
+`presence` is `{"online": true}`, `{"online": false, "lastSeen": "2026-11-05T14:00:00Z"}`, or
+null when it offers no capability, which says nothing about whether it is around. `zone run`
+announces this device to the zone, and shows the others in `zone who`, only with `--presence`
+(or `ZONE_PRESENCE=1`).
+
+`zone status` has `lastSyncMs` (the last sync that went through) and `lastLiveMs` (the last
+message the live session applied between syncs). A save never moves either backwards, so a
+long-running `zone run` cannot put an old time over a newer one written by another command.
+
+**Naming and leaving.** `zone join --kit --name NAME` asks to be listed as NAME. `zone rename
+NAME` changes it later: the owner writes roster names, so for any member but the owner the new
+name appears once an owner device has synced, and note authors follow it (old notes too).
+`zone join --cap KIND[:LABEL]` (`folder`, `inference` or `stream`; repeatable) publishes a
+capability once admitted, offered to the members the zone has then, so it shows in `zone members`
+from the first look. `zone leave` tells the owner, who removes the member, and deletes the zone
+from this device; first it writes every receipt it holds to `<state>/receipts-<zone>.json`, which
+`zone receipts verify --file` checks offline. The zone's owner cannot leave.
 
 `kind` is `human`, `agent`, `device`, `outpost` or `robot`. A grant's `used` counts the members
 the roster shows added under it: removing a member does not give its place back, and an
@@ -324,6 +350,18 @@ it names, plus the sender's own devices so the sender keeps a copy, before it le
 The recipient list is inside the ciphertext: a member who is not on it gets nothing it can open.
 A pseudonym the roster does not list (unknown or removed) is refused with `not-a-member`, naming
 it, before anything is posted. Pseudonyms come from `zone members`.
+
+**Replies.** `zone note --reply-to ID TEXT` answers the note with that `id`. A reply's line has
+`reply_to` (the note it answers) and `thread` (the first note of its thread, as far as this device
+holds the chain). A device from before replies cannot read one, so upgrade members first.
+
+**Receipts.** The device of a member a direct or group note was addressed to signs a `delivered`
+receipt for it, sealed to the sender alone: `zone run` sends it after the sync that brought the
+note, `zone notes` too. Zone-wide notes get none. `read` receipts go only from a member who ran
+`zone receipts read on` (`off` turns it back off; with neither it shows the setting), and only
+when `zone notes` shows the note. The sender's `zone notes` lists a note it sent to members with
+`receipts: [{"member","kind","at"}]`; each receipt is signed by the member's device and checked
+against the roster and the note's text before it is shown.
 
 **Quiet by default.** `zone notes` and `zone files` sync once and list only this device's inbox:
 items addressed to this member, items it sent, and zone-wide items only once it subscribed.
