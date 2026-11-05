@@ -109,7 +109,7 @@ enum Command {
         manifest: Option<PathBuf>,
         /// The name this seat goes by (1 to 64 bytes of text): the name it advertises, with the
         /// CLI's own skill (`Zone notes and files`), and with `--kit` also the name the admitter
-        /// rosters it under, shown as the author of its notes. A `--manifest` name does the same.
+        /// rosters it under, shown as the author of its notes.
         #[arg(long, value_name = "NAME")]
         name: Option<String>,
         /// With `--kit`: which of the kit's agents this seat is. Agents sharing one kit need
@@ -544,14 +544,15 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
             name,
             agent_id,
         } => {
+            // Only an explicit --name rides in a kit join request as the roster name to ask for.
+            // A manifest name and a default made later for a nameless seat stay in the sealed
+            // profile: admitters from before `name` refuse a request carrying an unknown key.
+            let requested = name.clone();
             let profile = match (manifest, name) {
                 (Some(file), _) => Some(profile::read_manifest(&file)?),
                 (None, Some(name)) => Some(profile::named(&name)?),
                 (None, None) => None,
             };
-            // A name given here (or by the manifest) is also what a kit join asks the admitter
-            // to roster this seat under; a default made later for a nameless seat is not.
-            let requested = profile.as_ref().map(|p| p.name.clone());
             let kit = match (with_kit, kit.as_ref()) {
                 (true, None) => return Err("join --kit needs the kit key: --key-file FILE".into()),
                 (true, Some(k)) => Some(k),

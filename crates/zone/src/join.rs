@@ -26,7 +26,7 @@
 //! The name and skills to advertise (`--manifest`, `--name`, else a saved `agent.json`, else a
 //! default from the kit agent id or roster name) go to the SDK right after the join and before
 //! the wait; the SDK publishes them on the first admitted sync (profile.rs). A name given by
-//! `--name` or the manifest is also the one a kit join asks the admitter to roster the seat under.
+//! `--name` is also the one a kit join asks the admitter to roster the seat under.
 //!
 //! `--cap KIND[:LABEL]` (repeatable) publishes a capability of this device once it is admitted, so
 //! it shows in `zone members` from the first look instead of after a separate step. It is offered
