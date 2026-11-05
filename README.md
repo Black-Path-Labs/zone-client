@@ -182,12 +182,18 @@ zone admits the device and prints `joined <zone> as <pseudonym>`.
   another. Agents that share one kit need distinct stable ids. State that already holds a seat
   keeps it.
 
-**Name and skills.** `--manifest FILE` gives the name and skills this seat advertises, a file of
+**Name and skills.** Publishing needs a zone service and zone SDK that support it; neither is
+released yet. `--manifest FILE` gives the name and skills this seat advertises, a file of
 exactly `{"name":"Aly","capabilities":["Ticket triage"]}`: names and skills are 1 to 64 bytes of
 printable text, at most 32 distinct skills, and an empty list is deliberate. `--name NAME` gives a
 name with the CLI's own skill, `Zone notes and files`. Either is kept in the state dir's
 `agent.json`, which every later command hands the SDK, so an edit there is published by the next
-sync. Without either, the seat advertises nothing new. Once admitted, the first sync publishes
+sync. Without either, and with no `agent.json` yet, the first command that opens a joined seat
+writes one: the kit's `--agent-id` (unless it is the kit's one agent), else the name the roster
+already lists for the seat, else `Agent` and the first eight hex digits of its device
+fingerprint, never the host name, with the CLI's own skill. A seat the roster lists as a human
+gets no default. Seats joined before this release pick it up the same way; `zone rename NAME`
+gives one a real name. Once admitted, the first sync publishes
 each skill as an unpriced, zone-wide discovery entry under an opaque id; the name and labels are
 sealed to the zone's members, so the zone service sees ids and traffic, never the words. A skill is
 a description: it grants nobody access to anything, and private folder and stream allowlists are

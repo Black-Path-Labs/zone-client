@@ -8,10 +8,14 @@
 //! list is deliberate and withdraws the seat's skills. After admission the SDK publishes each
 //! skill as an unpriced, zone-wide discovery entry and seals the name and labels to the zone's
 //! members. A skill is a description: it grants nobody access to anything.
+//!
+//! A seat given neither (a plain `zone join`, or one joined before the CLI published) advertises
+//! a default the first time a command opens it: its kit agent id or roster name, else `Agent`
+//! and its fingerprint, with the CLI's own skill. `zone rename NAME` gives it a real name.
 
 use std::path::{Path, PathBuf};
 
-use bp_workspace_core::agent_join::AgentProfile;
+use bp_workspace_core::agent_join::{AgentProfile, DEFAULT_AGENT_ID};
 use bp_zone_core::ZoneDevice;
 
 /// The skill the CLI itself supports, advertised when a name is given without a manifest.
@@ -95,14 +99,87 @@ pub fn save(state: &Path, profile: &AgentProfile) -> Result<(), String> {
         .map_err(|e| format!("{}: {}", file.display(), e.kind()))
 }
 
+/// The name a seat advertises when nobody gave it one: `agent_id` (a kit agent's own id, not the
+/// shared `default`), else the name the zone's roster already lists for this seat, else
+/// `Agent` and the device fingerprint's first eight hex digits, as the SDK names an admitted
+/// agent. Never the host name: a CLI install is only `zone-cli` to the zone. Always a valid name.
+pub fn default_name(
+    agent_id: Option<&str>,
+    roster_name: Option<&str>,
+    fingerprint: &str,
+) -> String {
+    let valid = |n: &&str| with_name(named("x").expect("valid"), n).is_ok();
+    if let Some(id) = agent_id.filter(|id| *id != DEFAULT_AGENT_ID).filter(valid) {
+        return id.to_owned();
+    }
+    if let Some(name) = roster_name.filter(valid) {
+        return name.to_owned();
+    }
+    let hex: String = fingerprint
+        .strip_prefix("sha256:")
+        .unwrap_or(fingerprint)
+        .chars()
+        .filter(char::is_ascii_hexdigit)
+        .take(8)
+        .collect();
+    if hex.is_empty() {
+        "Agent".to_owned()
+    } else {
+        format!("Agent {hex}")
+    }
+}
+
+/// The profile a joined seat advertises when it has neither `agent.json` nor a profile in the
+/// SDK: [`default_name`] and the CLI's own skill. None for a seat the roster lists as a human,
+/// who names themselves.
+fn default_profile(device: &ZoneDevice, agent_id: Option<&str>) -> Option<AgentProfile> {
+    let me = device.members().into_iter().find(|m| m.is_me);
+    if me.as_ref().is_some_and(|m| m.kind == "human") {
+        return None;
+    }
+    let fingerprint = device.device_fingerprint().unwrap_or_default();
+    let name = default_name(agent_id, me.as_ref().map(|m| m.name.as_str()), &fingerprint);
+    named(&name).ok()
+}
+
 /// Hand the SDK the saved profile, when there is one and a zone is joined. The SDK ignores an
 /// unchanged one. A bad file is a warning, never a reason to refuse an unrelated command.
-pub fn apply(state: &Path, device: &ZoneDevice) {
+///
+/// A joined seat with no saved profile and none in the SDK (a plain `zone join`, or a seat
+/// joined before the CLI published anything) gets [`default_profile`], saved to `agent.json`
+/// so `zone rename` and an edit keep working from it; the next sync publishes it. `agent_id`
+/// is the kit agent id a join was given, if any. True when that default was set just now.
+pub fn apply(state: &Path, device: &ZoneDevice, agent_id: Option<&str>) -> bool {
     if device.status().zone_id.is_none() {
-        return;
+        return false;
     }
     match load(state) {
-        Ok(None) => {}
+        Ok(None) => {
+            if !matches!(device.agent_profile(), Ok(None)) {
+                return false;
+            }
+            let Some(p) = default_profile(device, agent_id) else {
+                return false;
+            };
+            if let Err(e) = device.set_agent_profile(p.clone()) {
+                eprintln!(
+                    "zone: default name and skills not applied ({})",
+                    crate::join::kind(&e)
+                );
+                return false;
+            }
+            if let Err(e) = save(state, &p) {
+                eprintln!("zone: {e}; the default name and skills apply but are not saved");
+            }
+            eprintln!(
+                "zone: this seat advertises the name {:?} and the skills {:?} from its next sync; \
+                 `zone rename NAME` or editing {} changes them",
+                p.name,
+                p.capabilities,
+                path(state).display()
+            );
+            true
+        }
         Ok(Some(p)) => {
             if let Err(e) = device.set_agent_profile(p) {
                 eprintln!(
@@ -111,8 +188,12 @@ pub fn apply(state: &Path, device: &ZoneDevice) {
                     crate::join::kind(&e)
                 );
             }
+            false
         }
-        Err(e) => eprintln!("zone: {e}; the name and skills last applied stay"),
+        Err(e) => {
+            eprintln!("zone: {e}; the name and skills last applied stay");
+            false
+        }
     }
 }
 
@@ -189,5 +270,35 @@ mod tests {
                 .mode();
             assert_eq!(mode & 0o777, 0o600);
         }
+    }
+
+    #[test]
+    fn a_default_name_is_the_agent_id_then_the_roster_name_then_the_fingerprint() {
+        let fp = "sha256:0123abcd4567ef";
+        assert_eq!(default_name(Some("aly"), Some("Old"), fp), "aly");
+        // The shared kit id names nobody.
+        assert_eq!(
+            default_name(Some(DEFAULT_AGENT_ID), Some("Zone App"), fp),
+            "Zone App"
+        );
+        assert_eq!(default_name(None, Some("Zone App"), fp), "Zone App");
+        assert_eq!(default_name(None, None, fp), "Agent 0123abcd");
+        // Anything that is not a valid name falls through, so the result always is one.
+        let long = "x".repeat(65);
+        assert_eq!(
+            default_name(Some(&long), Some("bad\nname"), fp),
+            "Agent 0123abcd"
+        );
+        assert_eq!(default_name(None, Some(""), ""), "Agent");
+        for n in [
+            default_name(Some(&long), None, "sha256:zz"),
+            default_name(None, None, fp),
+        ] {
+            assert!(named(&n).is_ok(), "{n}");
+        }
+        assert_eq!(
+            named(&default_name(None, None, fp)).unwrap().capabilities,
+            DEFAULT_CAPABILITIES
+        );
     }
 }

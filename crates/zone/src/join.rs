@@ -22,9 +22,9 @@
 //! (`join_agent`), so a fresh install of the same agent finds the same seat instead of adding
 //! another. State that already holds a seat keeps it.
 //!
-//! The name and skills to advertise (`--manifest`, `--name`, else a saved `agent.json`) go to the
-//! SDK right after the join and before the wait; the SDK publishes them on the first admitted sync
-//! (profile.rs).
+//! The name and skills to advertise (`--manifest`, `--name`, else a saved `agent.json`, else a
+//! default from the kit agent id or roster name) go to the SDK right after the join and before
+//! the wait; the SDK publishes them on the first admitted sync (profile.rs).
 //!
 //! Every step is an SDK call. Running `zone join` again with the same code resumes the wait: it
 //! syncs first, so a device admitted meanwhile is done without asking again. Each sync is noted
@@ -168,16 +168,17 @@ pub fn run(state: &Path, opts: Options<'_>) -> Result<Outcome, String> {
         Err(e) => return Ok(refused(&e)),
     }
     trace("joined");
-    let given = opts.profile.is_some();
-    match opts.profile {
+    // Given now, or a default made now for a seat that never had one: publish it at once.
+    let given = match opts.profile {
         Some(p) => {
             device
                 .set_agent_profile(p.clone())
                 .map_err(|e| format!("the name and skills were not taken ({})", kind(&e)))?;
             profile::save(state, &p)?;
+            true
         }
-        None => profile::apply(state, &device),
-    }
+        None => profile::apply(state, &device, opts.agent_id),
+    };
     let zone_id = device.status().zone_id.unwrap_or_default();
     let mut record = SyncRecord::load(state);
     if device.status().admitted {
