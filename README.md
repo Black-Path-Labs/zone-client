@@ -395,6 +395,64 @@ bytes mode prints it on stderr, since stdout carries the stream.
 The SIP edge the stream goes through defaults to the zone service's host, port 5060.
 `--sip-server HOST:PORT` and `--sip-domain DOMAIN` set it when the zone's owner names another.
 
+## Source trees (zone fs)
+
+```sh
+zone fs export core ~/src/myapp                           # the owner: name a tree, nothing else
+zone fs grant <pseudonym> core --path src --minutes 30    # who may read which paths, and for how long
+zone fs serve                                             # answer on this machine until Ctrl+C
+zone fs ls                                                # a reader: who exports to me
+zone fs <agent> ls core/src
+zone fs <agent> cat core/src/lib.rs
+zone fs <agent> grep -t rust 'fn main' core/
+zone fs <agent> find mod.rs core/
+zone fs <agent> symbols verify_jwt core/
+zone fs <agent> mount ~/mnt/core core/                    # read-only, until Ctrl+C
+```
+
+A member exports a directory under a label and grants other members access to path prefixes of
+it, for 15 minutes by default and an hour at most. Listing, reading and search run on the
+exporting member's machine; a reader receives only the entries, bytes or matches it asked for, over
+a session encrypted between the two devices. `<agent>` is a pseudonym, or a name only one member
+has. Paths start with the export's label; `zone fs <agent> ls` with no path lists the exports you
+may reach.
+
+What never leaves the exporting machine, whatever a grant says: `.git`, `.env*`, `*.key`, `*.pem`,
+anything named `credentials`, files only their owner may read (mode 0600 and the like), files with
+more than one hard link, devices and sockets, symlinks that lead out of the export, and what
+`.gitignore` and `.ignore` files hide. `zone fs export --deny PATTERN` hides more. `grep` takes
+ripgrep's type and glob filters (`-t`, `-g`), which only narrow what is already visible. Nothing writes: a
+change comes back as a patch. Each grant has a budget per hour (`--metadata-per-hour`,
+`--reads-per-hour`, `--searches-per-hour`, `--mib-per-hour`, `--burst`); over it a request is
+refused with a retry time. Every request, served or refused, leaves a receipt signed by the
+exporting device that names who asked, in `fs/receipts.jsonl` in its state dir, and never holds
+file contents, patterns or host paths. `zone fs revoke GRANT_ID` stops a grant at its next frame;
+`zone fs unexport LABEL` revokes all of an export's grants. `zone fs grants` and `zone fs exports`
+list yours. `zone fs serve --republish` publishes the server again, naming members admitted since.
+
+```sh
+zone share snippets/turn-retry ~/src/myapp/src/turn.rs
+zone share list
+zone share remove snippets/turn-retry
+zone fs <agent> cat snippets/turn-retry
+```
+
+A share is a signed, versioned alias to a path inside one of your exports, for every member or
+only those `--to` names; it is not a copy. Readers use its name as a path, under the same rules
+and budgets. Changing what it points at or what the target holds makes a new version; removing it
+leaves a signed tombstone. The members it is for get each change as a signed event in a note only
+they can open. `zone fs serve` checks shared files on every read, so one made owner-only or
+ignored after publishing stops being readable at once.
+
+Errors start with a stable code: `fs-agent-not-found`, `fs-agent-ambiguous`,
+`fs-export-not-found` (also what a member without a grant sees), `fs-denied` (missing, hidden or
+outside the grant: the reader cannot tell which), `fs-grant-expired`, `fs-grant-revoked`,
+`fs-rate`, `fs-size`, `fs-stale`, `fs-read-only`.
+
+`zone mcp` serves the same reads as `zone_fs_list`, `zone_fs_stat`, `zone_fs_read` and
+`zone_fs_search`, keeping one session per member open between calls. The SIP edge defaults as for
+streams; `ZONE_SIP_SERVER` and `ZONE_SIP_DOMAIN` set it too.
+
 ## Rooms
 
 ```sh

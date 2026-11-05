@@ -9,6 +9,8 @@ use clap::{Parser, Subcommand};
 
 mod backoff;
 mod device;
+mod fs;
+mod fsmount;
 mod items;
 mod join;
 mod links;
@@ -199,6 +201,19 @@ enum Command {
         /// Do not send the sender a file receipt.
         #[arg(long)]
         no_receipt: bool,
+    },
+    /// Browse and search the source trees other members export to you (`zone fs <agent> ls|cat|
+    /// tree|stat|grep|find`), and export, grant and serve your own. Read-only; runs on the
+    /// exporter's host.
+    Fs {
+        #[command(subcommand)]
+        command: fs::FsCommand,
+    },
+    /// Publish a file or folder of one of your exports under a stable name (`zone share NAME
+    /// PATH`), list your shares, or remove one. Readers use the name as a path.
+    Share {
+        #[command(subcommand)]
+        command: fs::ShareCommand,
     },
     /// Stream bytes or media between two members, end to end, with a signed receipt each side.
     Stream {
@@ -581,6 +596,14 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
             no_receipt,
         } => {
             items::get(&state, &id, &output, force, !no_receipt)?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Share { command } => {
+            fs::share_command(&state, command)?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Fs { command } => {
+            fs::command(&state, command)?;
             Ok(ExitCode::SUCCESS)
         }
         Command::Stream {

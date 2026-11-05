@@ -636,8 +636,14 @@ impl Bridge {
     }
 }
 
-/// The local slash-command tools, one per command in the SDK's registry.
+/// The local tools: one per slash command in the SDK's registry, and the zone fs tools.
 fn local_tools() -> Vec<Value> {
+    let mut tools = slash_tools();
+    tools.extend(crate::fs::mcp_tools());
+    tools
+}
+
+fn slash_tools() -> Vec<Value> {
     commands::COMMANDS
         .iter()
         .map(|c| {
@@ -707,6 +713,9 @@ fn answer_locally(state: &Path, msg: &Value, hosted: bool) -> Option<Option<Valu
     let method = msg.get("method")?.as_str()?;
     let id = msg.get("id").cloned();
     if method == "tools/call" {
+        if let Some(result) = crate::fs::mcp_call(state, &msg["params"]) {
+            return Some(id.map(|id| json!({"jsonrpc": "2.0", "id": id, "result": result})));
+        }
         if let Some(line) = local_line(&msg["params"]) {
             let result = local_call(state, &line);
             return Some(id.map(|id| json!({"jsonrpc": "2.0", "id": id, "result": result})));
@@ -930,8 +939,13 @@ mod tests {
 
     #[test]
     fn every_command_is_a_local_tool_and_back() {
-        let tools = local_tools();
+        let tools = slash_tools();
         assert_eq!(tools.len(), commands::COMMANDS.len());
+        assert_eq!(
+            local_tools().len(),
+            commands::COMMANDS.len() + 4,
+            "and the zone fs tools"
+        );
         assert_eq!(tools[1]["inputSchema"]["required"], json!(["member"]));
         let line = |name: &str, args: Value| local_line(&json!({"name": name, "arguments": args}));
         assert_eq!(line("zone_who", json!({})).as_deref(), Some("/who"));
@@ -954,7 +968,7 @@ mod tests {
         assert_eq!(r["result"]["protocolVersion"], "2025-03-26");
         let list = json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"});
         let r = answer_locally(tmp.path(), &list, false).unwrap().unwrap();
-        assert_eq!(r["result"]["tools"].as_array().unwrap().len(), 8);
+        assert_eq!(r["result"]["tools"].as_array().unwrap().len(), 8 + 4);
         let note = json!({"jsonrpc": "2.0", "method": "notifications/initialized"});
         assert_eq!(answer_locally(tmp.path(), &note, false), Some(None));
         // With a hosted server, only the local tools' calls stay here.
