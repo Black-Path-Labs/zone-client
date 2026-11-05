@@ -9,6 +9,8 @@ use clap::{Parser, Subcommand};
 
 mod backoff;
 mod device;
+#[allow(dead_code)]
+mod fsmount;
 mod items;
 mod join;
 mod links;
