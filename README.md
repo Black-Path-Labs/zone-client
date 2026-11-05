@@ -432,6 +432,9 @@ exporting device that names who asked, in `fs/receipts.jsonl` in its state dir, 
 file contents, patterns or host paths. `zone fs revoke GRANT_ID` stops a grant at its next frame;
 `zone fs unexport LABEL` revokes all of an export's grants. `zone fs grants` and `zone fs exports`
 list yours. `zone fs serve --republish` publishes the server again, naming members admitted since.
+`semantic` asks the exporting machine for the windows nearest a query by a pinned local embedding
+model; `zone fs serve` ships no model yet, so it answers that semantic search is off until an
+owner runs a server built with one.
 
 ```sh
 zone share snippets/turn-retry ~/src/myapp/src/turn.rs
