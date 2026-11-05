@@ -3,7 +3,8 @@
 //! An invite link is redeemed by the SDK's join; the owner's device admits on its next sync. A
 //! zone code joins in person: the owner adds the join code this prints (Add a device). With
 //! `--kit` the device also asks the zone's admitter with a join request the kit key signs (SDK
-//! `request_admission`), so admission needs no human step. A request lives
+//! `request_admission`), so admission needs no human step; `--name` asks to be rostered under
+//! that name rather than the admitter's "Agent". A request lives
 //! `MAX_REQUEST_AGE_MS`; while waiting, a new one goes out when the last has expired, and after
 //! a failed send (no grant in force yet: 404) the waiting backoff decides when.
 //!
@@ -63,6 +64,8 @@ pub struct Options<'a> {
     /// The Core a join address is resolved at.
     pub core: &'a str,
     pub kit: Option<&'a KitKey>,
+    /// With `kit`: the name the admitter is asked to roster this member under.
+    pub name: Option<&'a str>,
     pub wait: bool,
     pub timeout: Option<Duration>,
 }
@@ -184,7 +187,11 @@ pub fn run(state: &Path, opts: Options<'_>) -> Result<Outcome, String> {
     loop {
         if let (Some(kit), Some(due)) = (opts.kit, request_due) {
             if Instant::now() >= due {
-                match device.request_admission(kit.seed(), KIND) {
+                let asked_now = match opts.name {
+                    Some(name) => device.request_admission_named(kit.seed(), KIND, name),
+                    None => device.request_admission(kit.seed(), KIND),
+                };
+                match asked_now {
                     Ok(()) => {
                         request_backoff.succeeded();
                         asked = Some(Instant::now());

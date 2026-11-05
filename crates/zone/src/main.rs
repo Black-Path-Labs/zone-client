@@ -83,6 +83,10 @@ enum Command {
         /// Ask the zone's admitter to admit this device, signed with the kit key (`--key-file`).
         #[arg(long)]
         kit: bool,
+        /// With `--kit`: the name the admitter rosters this member under, shown as the author
+        /// of its notes (1 to 64 bytes of text). Without it the admitter names it "Agent".
+        #[arg(long, value_name = "NAME", requires = "kit")]
+        name: Option<String>,
         /// Return once joined (and, with `--kit`, asked) instead of waiting for admission.
         #[arg(long)]
         no_wait: bool,
@@ -427,6 +431,7 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
             invite_file,
             core,
             kit: with_kit,
+            name,
             no_wait,
             timeout,
         } => {
@@ -462,6 +467,7 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
                     code: &invite,
                     core: &core,
                     kit,
+                    name: name.as_deref(),
                     wait: !no_wait,
                     timeout: timeout.map(std::time::Duration::from_secs),
                 },
