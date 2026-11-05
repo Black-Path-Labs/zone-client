@@ -29,22 +29,28 @@ use crate::run;
 const RECEIPT_WAIT_SECS: u32 = 30;
 /// An `rtp` stream that carried media ends when none has arrived for this long.
 const RTP_IDLE: Duration = Duration::from_secs(3);
-/// The SIP port the zone's edge listens on unless `--sip-server` says otherwise.
-const SIP_PORT: u16 = 5060;
+/// The SIP-over-TLS port the zone's edge listens on unless `--sip-server` says otherwise. The
+/// SDK speaks SIP to the edge over TLS only: the REGISTER carries this device's bearer and proof.
+const SIP_PORT: u16 = bp_zone_core::sip_transport::SIP_TLS_PORT;
 /// How much of stdin goes into one `send`.
 const CHUNK: usize = 64 * 1024;
 
 /// Where the zone's SIP edge is. The domain defaults to the host of the zone service the device
-/// uses, the server to what that domain's `_sip._udp` SRV record names.
+/// uses, the server to what that domain's `_sips._tcp` SRV record names. TLS only.
 #[derive(clap::Args, Clone, Default)]
 pub struct SipArgs {
-    /// The zone's SIP edge, HOST:PORT over UDP (default: the SIP domain's `_sip._udp` SRV record,
-    /// else the zone service's host, port 5060).
+    /// The zone's SIP edge over TLS, HOST:PORT or sips:HOST:PORT (default: the SIP domain's
+    /// `_sips._tcp` SRV record, else the zone service's host, port 5061). UDP and TCP are refused:
+    /// they would carry this device's sign-in in the clear.
     #[arg(long, value_name = "HOST:PORT", env = "ZONE_SIP_SERVER")]
     pub sip_server: Option<String>,
     /// The zone's SIP domain (default: the zone service's host).
     #[arg(long, value_name = "DOMAIN", env = "ZONE_SIP_DOMAIN")]
     pub sip_domain: Option<String>,
+    /// A PEM file of CA certificates the SIP edge's certificate may chain to, besides the usual
+    /// public roots (a lab edge with its own CA).
+    #[arg(long, value_name = "PATH", env = "ZONE_SIP_CA_FILE")]
+    pub sip_ca_file: Option<std::path::PathBuf>,
 }
 
 impl SipArgs {
@@ -53,6 +59,7 @@ impl SipArgs {
         SipArgs {
             sip_server: std::env::var("ZONE_SIP_SERVER").ok(),
             sip_domain: std::env::var("ZONE_SIP_DOMAIN").ok(),
+            sip_ca_file: std::env::var_os("ZONE_SIP_CA_FILE").map(Into::into),
         }
     }
 }
@@ -91,8 +98,8 @@ pub(crate) fn edge(device: &ZoneDevice, sip: &SipArgs) -> Result<(String, String
         Some(d) => d.clone(),
         None => host()?,
     };
-    // The SIP domain's `_sip._udp` SRV record names the edge; without one, the zone service's
-    // host, as before (a host behind an HTTP-only proxy answers no SIP there).
+    // The SIP domain's `_sips._tcp` SRV record names the edge; without one, the zone service's
+    // host, port 5061 (a host behind an HTTP-only proxy answers no SIP there).
     let server = match &sip.sip_server {
         Some(s) => s.clone(),
         None => match crate::srv::sip_edge(&domain) {
@@ -100,6 +107,15 @@ pub(crate) fn edge(device: &ZoneDevice, sip: &SipArgs) -> Result<(String, String
             None => format!("{}:{SIP_PORT}", host()?),
         },
     };
+    // Refuse a plaintext edge here, with the flag's name, before the SDK is asked.
+    bp_zone_core::sip_transport::EdgeAddr::parse(&server)
+        .map_err(|e| format!("--sip-server: {e}"))?;
+    if let Some(path) = &sip.sip_ca_file {
+        let pem = std::fs::read(path)
+            .map_err(|e| format!("--sip-ca-file {}: {}", path.display(), e.kind()))?;
+        bp_zone_core::sip_transport::trust_sip_ca_pem(&pem)
+            .map_err(|e| format!("--sip-ca-file {}: {e}", path.display()))?;
+    }
     Ok((server, domain))
 }
 

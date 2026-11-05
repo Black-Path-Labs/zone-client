@@ -90,6 +90,10 @@ fn wait_for_news(device: &Arc<ZoneDevice>, live: Option<&Live>) {
 /// too (live.rs) when `--sip-ws` names the edge.
 pub fn run(state: &Path, rounds: Option<u32>, live_args: LiveArgs) -> Result<(), String> {
     catch_signals();
+    // A plaintext `--sip-ws` is refused before anything runs, not retried for ever.
+    if live_args.wanted() {
+        live_args.check()?;
+    }
     let device = device::open_existing(state, Arc::new(Http::default()))?
         .filter(|d| d.status().zone_id.is_some())
         .ok_or("no zone joined: run `zone join` first")?;

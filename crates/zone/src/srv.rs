@@ -1,4 +1,5 @@
-//! The zone's SIP edge from DNS: the `_sip._udp.<SIP domain>` SRV record (RFC 3263), asked of
+//! The zone's SIP edge from DNS: the `_sips._tcp.<SIP domain>` SRV record (RFC 3263: SIP over
+//! TLS; the SDK speaks no other transport to the edge), asked of
 //! the first nameserver in /etc/resolv.conf over UDP. The zone service's host often sits behind
 //! an HTTP-only proxy that carries no SIP, so its own name is no edge; the SRV record names one.
 //! Only the lowest-priority answer is used, and nothing is cached.
@@ -13,11 +14,11 @@ const WAIT: Duration = Duration::from_secs(2);
 const TYPE_SRV: u16 = 33;
 const CLASS_IN: u16 = 1;
 
-/// `HOST:PORT` of the SIP edge `_sip._udp.<domain>` names, or `None` (no record, no resolver,
+/// `HOST:PORT` of the SIP edge `_sips._tcp.<domain>` names, or `None` (no record, no resolver,
 /// no answer in time).
 pub fn sip_edge(domain: &str) -> Option<String> {
     let resolver = nameserver(&std::fs::read_to_string("/etc/resolv.conf").ok()?)?;
-    let name = format!("_sip._udp.{}", domain.trim_end_matches('.'));
+    let name = format!("_sips._tcp.{}", domain.trim_end_matches('.'));
     let mut id = [0u8; 2];
     OsRng.fill_bytes(&mut id);
     let id = u16::from_be_bytes(id);
@@ -163,9 +164,9 @@ fn read_name(msg: &[u8], mut at: usize) -> Option<String> {
 mod tests {
     use super::*;
 
-    /// A response to `_sip._udp.example.com` with two SRV answers, the second compressed.
+    /// A response to `_sips._tcp.example.com` with two SRV answers, the second compressed.
     fn response(id: u16) -> Vec<u8> {
-        let mut m = encode_query(id, "_sip._udp.example.com").unwrap();
+        let mut m = encode_query(id, "_sips._tcp.example.com").unwrap();
         m[2] = 0x81;
         m[3] = 0x80;
         m[7] = 2;
@@ -198,7 +199,7 @@ mod tests {
         let mut nx = response(7);
         nx[3] = 0x83;
         assert_eq!(parse_srv_answer(&nx, 7), None);
-        let q = encode_query(7, "_sip._udp.example.com").unwrap();
+        let q = encode_query(7, "_sips._tcp.example.com").unwrap();
         assert_eq!(parse_srv_answer(&q, 7), None);
         assert_eq!(parse_srv_answer(&response(7)[..40], 7), None);
     }
