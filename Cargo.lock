@@ -201,7 +201,7 @@ dependencies = [
 [[package]]
 name = "bp-workspace-core"
 version = "0.1.0"
-source = "git+https://github.com/Black-Path-Labs/zone-sdk?rev=5e84463e994b81459d9623848fa0eeaf37bd06ff#5e84463e994b81459d9623848fa0eeaf37bd06ff"
+source = "git+https://github.com/Black-Path-Labs/zone-sdk?rev=98552f5df5b88aa5e12a2b697116e981a7cb0d62#98552f5df5b88aa5e12a2b697116e981a7cb0d62"
 dependencies = [
  "aes-gcm",
  "base64",
@@ -218,7 +218,7 @@ dependencies = [
 [[package]]
 name = "bp-zone-core"
 version = "0.1.0"
-source = "git+https://github.com/Black-Path-Labs/zone-sdk?rev=5e84463e994b81459d9623848fa0eeaf37bd06ff#5e84463e994b81459d9623848fa0eeaf37bd06ff"
+source = "git+https://github.com/Black-Path-Labs/zone-sdk?rev=98552f5df5b88aa5e12a2b697116e981a7cb0d62#98552f5df5b88aa5e12a2b697116e981a7cb0d62"
 dependencies = [
  "bp-workspace-core",
  "bp-zone-rtc",
@@ -233,7 +233,7 @@ dependencies = [
 [[package]]
 name = "bp-zone-fs"
 version = "0.1.0"
-source = "git+https://github.com/Black-Path-Labs/zone-sdk?rev=5e84463e994b81459d9623848fa0eeaf37bd06ff#5e84463e994b81459d9623848fa0eeaf37bd06ff"
+source = "git+https://github.com/Black-Path-Labs/zone-sdk?rev=98552f5df5b88aa5e12a2b697116e981a7cb0d62#98552f5df5b88aa5e12a2b697116e981a7cb0d62"
 dependencies = [
  "aes-gcm",
  "bp-workspace-core",
@@ -254,7 +254,7 @@ dependencies = [
 [[package]]
 name = "bp-zone-rtc"
 version = "0.1.0"
-source = "git+https://github.com/Black-Path-Labs/zone-sdk?rev=5e84463e994b81459d9623848fa0eeaf37bd06ff#5e84463e994b81459d9623848fa0eeaf37bd06ff"
+source = "git+https://github.com/Black-Path-Labs/zone-sdk?rev=98552f5df5b88aa5e12a2b697116e981a7cb0d62#98552f5df5b88aa5e12a2b697116e981a7cb0d62"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -735,7 +735,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1697,7 +1697,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2045,7 +2045,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2568,7 +2568,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
