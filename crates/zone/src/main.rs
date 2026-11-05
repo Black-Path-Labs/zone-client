@@ -19,6 +19,7 @@ mod join;
 mod links;
 mod live;
 mod mcp;
+mod profile;
 mod receipts;
 mod record;
 mod room;
@@ -95,6 +96,23 @@ enum Command {
         /// Stop waiting after SECS (exit 4).
         #[arg(long, value_name = "SECS")]
         timeout: Option<u64>,
+        /// The name and skills this seat advertises, from FILE: exactly
+        /// `{"name":"Aly","capabilities":["Ticket triage"]}`. Kept in the state dir's
+        /// `agent.json`; published, sealed to the zone's members, once admitted.
+        #[arg(long, value_name = "FILE", conflicts_with = "name")]
+        manifest: Option<PathBuf>,
+        /// The name this seat advertises, with the CLI's own skill (`Zone notes and files`).
+        #[arg(long, value_name = "NAME")]
+        name: Option<String>,
+        /// With `--kit`: which of the kit's agents this seat is. Agents sharing one kit need
+        /// distinct stable ids; the same id finds the same seat again.
+        #[arg(long, value_name = "ID", requires = "kit")]
+        agent_id: Option<String>,
+    },
+    /// Change the name this seat advertises, keeping its skills, and sync once to publish it.
+    Rename {
+        /// 1 to 64 bytes of printable text.
+        name: String,
     },
     /// Print this device's zone state as JSON: zone, pseudonym, admitted or pending, members,
     /// last and next sync, last failure kind. Reads local state only.
@@ -269,8 +287,13 @@ enum Command {
     /// What everyone in the zone is working on (`/heads`), from the heads the running `zone run`
     /// holds.
     Heads,
-    /// The zone's capabilities as last synced (`/caps`).
-    Caps,
+    /// The zone's capabilities as last synced (`/caps`). With `--sync`: sync first, then print
+    /// the skills members advertise (`source: peer`) and the access Core gives each member
+    /// (`source: core`), as JSON.
+    Caps {
+        #[arg(long)]
+        sync: bool,
+    },
     /// What a capability costs (`/price`): one Core read, by kind, id or tag.
     Price {
         #[arg(required = true, num_args = 1..)]
@@ -482,7 +505,15 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
             kit: with_kit,
             no_wait,
             timeout,
+            manifest,
+            name,
+            agent_id,
         } => {
+            let profile = match (manifest, name) {
+                (Some(file), _) => Some(profile::read_manifest(&file)?),
+                (None, Some(name)) => Some(profile::named(&name)?),
+                (None, None) => None,
+            };
             let kit = match (with_kit, kit.as_ref()) {
                 (true, None) => return Err("join --kit needs the kit key: --key-file FILE".into()),
                 (true, Some(k)) => Some(k),
@@ -517,6 +548,8 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
                     kit,
                     wait: !no_wait,
                     timeout: timeout.map(std::time::Duration::from_secs),
+                    profile,
+                    agent_id: agent_id.as_deref(),
                 },
             )?;
             Ok(match outcome {
@@ -584,8 +617,16 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
             slash::run(&state, "/heads")?;
             Ok(ExitCode::SUCCESS)
         }
-        Command::Caps => {
+        Command::Caps { sync: false } => {
             slash::run(&state, "/caps")?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Caps { sync: true } => {
+            println!("{}", view::caps(&state)?);
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Rename { name } => {
+            println!("{}", view::rename(&state, &name)?);
             Ok(ExitCode::SUCCESS)
         }
         Command::Price { capability } => {

@@ -18,6 +18,14 @@
 //! request, since an admitter that is online answers within about a second; after that, and for
 //! a join that waits for a person, the waiting backoff decides.
 //!
+//! With `--kit` the SDK derives the seat's zone keys from the kit key and `--agent-id`
+//! (`join_agent`), so a fresh install of the same agent finds the same seat instead of adding
+//! another. State that already holds a seat keeps it.
+//!
+//! The name and skills to advertise (`--manifest`, `--name`, else a saved `agent.json`, else a
+//! default from the kit agent id or roster name) go to the SDK right after the join and before
+//! the wait; the SDK publishes them on the first admitted sync (profile.rs).
+//!
 //! Every step is an SDK call. Running `zone join` again with the same code resumes the wait: it
 //! syncs first, so a device admitted meanwhile is done without asking again. Each sync is noted
 //! for `zone status` (record.rs). `-v` times each step (transport.rs).
@@ -26,7 +34,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use bp_workspace_core::agent_join::MAX_REQUEST_AGE_MS;
+use bp_workspace_core::agent_join::{AgentProfile, DEFAULT_AGENT_ID, MAX_REQUEST_AGE_MS};
 use bp_workspace_core::magic_link;
 use bp_workspace_core::space::{is_join_address, InviteLink, ZoneCode, ZONE_CODE_PREFIX};
 use bp_zone_core::{ZoneDevice, ZoneError};
@@ -34,6 +42,7 @@ use rand_core::{OsRng, RngCore};
 
 use crate::backoff::{self, Backoff};
 use crate::device;
+use crate::profile;
 use crate::record::SyncRecord;
 use crate::secret::KitKey;
 use crate::transport::{trace, Http};
@@ -65,6 +74,10 @@ pub struct Options<'a> {
     pub kit: Option<&'a KitKey>,
     pub wait: bool,
     pub timeout: Option<Duration>,
+    /// The name and skills to advertise; None keeps a saved `agent.json`, if any.
+    pub profile: Option<AgentProfile>,
+    /// With a kit: which of its agents this seat is (default `DEFAULT_AGENT_ID`).
+    pub agent_id: Option<&'a str>,
 }
 
 /// The reason kind of an SDK error: `core-<status>` for Core's answers (0: not reached), else
@@ -147,17 +160,44 @@ pub fn run(state: &Path, opts: Options<'_>) -> Result<Outcome, String> {
     let device = device::open_or_create(state, &zone.core_url, &zone.core_zone, http)?;
     let resuming = device.status().zone_id.as_deref() == Some(zone.workspace_id.as_str());
     // An invite is redeemed here; a spent, expired or unknown one is Core's 404, a refusal.
-    match device.join(code.to_owned()) {
+    let joined = match opts.kit {
+        Some(kit) => device.join_agent(code, kit.seed(), opts.agent_id.unwrap_or(DEFAULT_AGENT_ID)),
+        None => device.join(code.to_owned()),
+    };
+    match joined {
         Ok(()) => {}
         Err(e) if transient(&kind(&e)) => return Err(e.to_string()),
         Err(e) => return Ok(refused(&e)),
     }
     trace("joined");
+    // Given now, or a default made now for a seat that never had one: publish it at once.
+    let given = match opts.profile {
+        Some(p) => {
+            device
+                .set_agent_profile(p.clone())
+                .map_err(|e| format!("the name and skills were not taken ({})", kind(&e)))?;
+            profile::save(state, &p)?;
+            true
+        }
+        None => profile::apply(state, &device, opts.agent_id),
+    };
     let zone_id = device.status().zone_id.unwrap_or_default();
+    let mut record = SyncRecord::load(state);
     if device.status().admitted {
+        // Already a member: publish a newly given name and skills now, not on a later sync.
+        if given {
+            let synced = device.sync(0);
+            record.synced(synced.as_ref().map(|_| ()));
+            record.save(state)?;
+            if let Err(e) = synced {
+                eprintln!(
+                    "zone join: sync failed ({}); the next sync publishes the name and skills",
+                    kind(&e)
+                );
+            }
+        }
         return admitted(&device, &zone_id);
     }
-    let mut record = SyncRecord::load(state);
     // A resumed wait: the admitter may have let this device in since. Look before asking again,
     // or the admitter refuses the new request as from a member.
     if resuming {
