@@ -22,8 +22,9 @@ This repository holds only the client. Every Zone and Core operation goes throug
 `bp-zone-core`, `bp-zone-rtc`), pinned by git revision in `Cargo.toml`. Do not add protocol code:
 routes, HTTP methods, token schemes, JWS, HPKE or signature handling belong in zone-sdk.
 `tests/repo_hygiene.rs` fails on them. A change the client needs from the SDK goes to zone-sdk
-first; zone-sdk is generated from Black Path Labs' main repository, so open an issue there rather
-than a pull request against its files.
+first. zone-sdk is developed in its own repository, so send the change there as a pull request.
+<!-- R-081 (M15), adopted on recommendation 2026-11-06, pending Matt's ratification: zone-sdk is
+developed in place, not generated from Core. -->
 
 Documented subcommands and flags are tested: `tests/docs.rs` fails if `README.md`,
 `SECURITY.md` or this file names a `zone` subcommand or flag that does not exist.

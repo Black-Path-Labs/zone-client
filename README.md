@@ -223,7 +223,8 @@ step and each Core exchange with its time (the route only: no id, header or body
 
 ## Invite a person with a magic link
 
-A magic link lets one named person join the zone. The zone's owner makes it (or a device the
+A magic link lets one person join the zone: the first device that opens it, inside its time
+window. The zone's owner makes it (or a device the
 owner granted invite-people):
 
 ```sh
@@ -235,7 +236,9 @@ It prints one JSON line, `{"link_id":"ml_…","expires_at":"…"}`. The link its
 `--out` file or stdout, never into the JSON line or a log. A link lasts 15 minutes unless `--ttl`
 says otherwise (`Ns`, `Nm` or `Nh`, 1 minute to 24 hours), and it works once: whoever opens it
 first joins, and the owner's device admits them on its next sync. Send it to that one person
-over a channel you trust; they join with `zone join --invite-file link.txt` or the web app.
+over a channel you trust; they join with `zone join --invite-file link.txt` or the web app. (First
+open wins: R-029, adopted on recommendation 2026-11-06. An owner confirm-before-admit is future
+work.)
 
 ```sh
 zone links                    # one JSON line per link: label, state, times, who joined
@@ -295,9 +298,10 @@ NAME` changes it later: the owner writes roster names, so for any member but the
 name appears once an owner device has synced, and note authors follow it (old notes too).
 `zone join --cap KIND[:LABEL]` (`folder`, `inference` or `stream`; repeatable) publishes a
 capability once admitted, offered to the members the zone has then, so it shows in `zone members`
-from the first look. `zone leave` tells the owner, who removes the member, and deletes the zone
-from this device; first it writes every receipt it holds to `<state>/receipts-<zone>.json`, which
-`zone receipts verify --file` checks offline. The zone's owner cannot leave.
+from the first look. `zone leave` tells the owner, who removes the member, and deletes the zone's
+local data from this device but keeps your signed receipts: first it writes every receipt it holds
+to `<state>/receipts-<zone>.json`, which `zone receipts verify --file` checks offline. File and
+note delivery receipts go with the zone. The zone's owner cannot leave.
 
 `kind` is `human`, `agent`, `device`, `outpost` or `robot`. A grant's `used` counts the members
 the roster shows added under it: removing a member does not give its place back, and an
@@ -348,9 +352,10 @@ Each prints one JSON object. They answer from what this device already holds and
 `who`, `whois`, `caps`, `receipts list`, `me` and `/help` read local state; `price` and `/links`
 (the same list as `zone links`) make the zone service's one read (a challenge and the signed
 request). While `zone run` holds the live session on the same state dir, each asks it over
-`live.sock` instead, and `zone who` is live: the session publishes this device's presence and
-subscribes to the zone's, signed by each device and checked against the roster here (the edge sees
-a device fingerprint and a time, which the registration already shows it). Without a running
+`live.sock` instead, and `zone who` is live: with `--presence` the session publishes this device's
+presence and subscribes to the zone's, signed by each device and checked against the roster here
+(the edge sees a device fingerprint and a time, which the registration already shows it); without
+it `zone who` shows only capability-derived presence. Without a running
 `zone run`, presence is unknown and `zone who` says so (`"presence": "no-live-session"`). `-v` shows
 how long each took.
 
@@ -594,8 +599,10 @@ the signature, that the grant is yours and live, that every path the patch touch
 grant and off the deny-list, then files it in its inbox; nothing is applied. The owner reviews it
 in a fresh git worktree at its base with its own checks (the checks you claim are recorded, never
 trusted), and only an explicit `accept` after checks that all passed signs an accepted-patch
-receipt with a payment reference, once per patch. Accept and reject each send the author the signed
-receipt in a note. `zone fs <agent> ask` sends the owner a question about the export as a note to
+receipt with a payment reference, once per patch. The reference is a settlement key; nothing is
+charged yet. Payment later goes through a Core quote and Tollgate (R-063, adopted on
+recommendation 2026-11-06). Accept and reject each send the
+author the signed receipt in a note. `zone fs <agent> ask` sends the owner a question about the export as a note to
 that member alone.
 
 Errors start with a stable code: `fs-agent-not-found`, `fs-agent-ambiguous`,
@@ -802,6 +809,10 @@ build from source needs access to it; use the release binaries. Opening zone-sdk
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+Licence note (2026-11-06): MIT is the licence as published on 2026-11-02, without a recorded
+decision. Pending Matt's ratification the repo moves to Apache-2.0 OR MIT to match zone-sdk
+(record M11; R-097, adopted on recommendation 2026-11-06).
 
 ## Security and contributing
 
