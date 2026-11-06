@@ -176,9 +176,10 @@ mod tests {
         m.extend_from_slice(&((6 + target.len()) as u16).to_be_bytes());
         m.extend_from_slice(&[0, 20, 0, 5, 0x13, 0xce]);
         m.extend_from_slice(target);
-        // priority 10 -> edge.<example.com via pointer to offset 22>:5060
+        // priority 10 -> edge.<example.com via pointer to offset 23>:5060. The query name
+        // starts at 12: 1+5 (`_sips`) + 1+4 (`_tcp`) puts `example.com` at 23.
         m.extend_from_slice(&[0xc0, 12, 0, 33, 0, 1, 0, 0, 1, 44]);
-        let target = [&b"\x04edge"[..], &[0xc0, 22]].concat();
+        let target = [&b"\x04edge"[..], &[0xc0, 23]].concat();
         m.extend_from_slice(&((6 + target.len()) as u16).to_be_bytes());
         m.extend_from_slice(&[0, 10, 0, 5, 0x13, 0xc4]);
         m.extend_from_slice(&target);

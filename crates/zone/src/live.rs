@@ -115,8 +115,8 @@ impl LiveArgs {
         !self.no_live && self.sip_ws.is_some()
     }
 
-    /// The REGISTER carries this device's bearer and proof: `--sip-ws` must be wss:// (ws:// to
-    /// a loopback host, a local test edge, alone).
+    /// The REGISTER carries this device's credential and proof: `--sip-ws` must be wss:// (ws://
+    /// to a loopback host, a local test edge, alone).
     pub fn check(&self) -> Result<(), String> {
         match &self.sip_ws {
             Some(ws) => bp_zone_core::sip_transport::check_live_url(ws)

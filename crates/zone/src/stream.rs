@@ -30,7 +30,8 @@ const RECEIPT_WAIT_SECS: u32 = 30;
 /// An `rtp` stream that carried media ends when none has arrived for this long.
 const RTP_IDLE: Duration = Duration::from_secs(3);
 /// The SIP-over-TLS port the zone's edge listens on unless `--sip-server` says otherwise. The
-/// SDK speaks SIP to the edge over TLS only: the REGISTER carries this device's bearer and proof.
+/// SDK speaks SIP to the edge over TLS only: the REGISTER carries this device's credential and
+/// proof.
 const SIP_PORT: u16 = bp_zone_core::sip_transport::SIP_TLS_PORT;
 /// How much of stdin goes into one `send`.
 const CHUNK: usize = 64 * 1024;

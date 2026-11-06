@@ -87,6 +87,7 @@ fn status_before_any_join_is_not_joined_json_and_makes_no_state() {
             "state": "not-joined",
             "members": 0,
             "lastSyncMs": null,
+            "lastLiveMs": null,
             "nextSyncMs": null,
             "lastFailure": null,
         })
